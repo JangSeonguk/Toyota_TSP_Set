@@ -1,0 +1,7 @@
+/__pycache__/
+/.claude/
+/.specify/
+/build/
+/dist/
+/specs/
+/tests/
