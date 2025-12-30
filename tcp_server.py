@@ -89,15 +89,16 @@ class TCPServer:
             logger.log_error("Error accepting connection", e)
             return False
 
-    def receive_command(self, buffer_size: int = 4096) -> Optional[str]:
+    def receive_command(self, buffer_size: int = 4096, timeout: Optional[float] = None) -> Optional[str]:
         """
         Receive command from connected client
 
         Args:
             buffer_size: Receive buffer size in bytes
+            timeout: Socket timeout in seconds (None = blocking)
 
         Returns:
-            Command string or None on error
+            Command string, None on disconnect, or raises socket.timeout
         """
         with self._lock:
             if self.client_socket is None:
@@ -105,6 +106,10 @@ class TCPServer:
                 return None
 
         try:
+            # Set timeout if specified
+            if timeout is not None:
+                self.client_socket.settimeout(timeout)
+
             # Receive data
             data = self.client_socket.recv(buffer_size)
 
@@ -117,6 +122,9 @@ class TCPServer:
             logger.log_info(f"Received {len(command_str)} bytes from client")
             return command_str
 
+        except socket.timeout:
+            # Timeout is not an error - just no data received yet
+            raise
         except Exception as e:
             logger.log_error("Error receiving command", e)
             self.close_client_connection()

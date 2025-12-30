@@ -4,6 +4,8 @@ Configuration constants for TCP-Controlled Web Browser Automation Module
 
 # URL Constants
 TARGET_URL = "https://shisaku.infra.tc/login"
+TESTS_URL = "https://shisaku.infra.tc/tests"
+PUSH_COMMAND_URL = "https://shisaku.infra.tc/push-command"
 
 # TCP Server Configuration
 DEFAULT_TCP_PORT = 5000
@@ -35,7 +37,14 @@ SELECTORS = {
     'json_textarea': '#textarea-formatter-0',
 
     # Update button - using class selector for more reliable matching
-    'update_button': 'button.update-button.btn-success'
+    'update_button': 'button.update-button.btn-success',
+
+    # Push command page selectors
+    'push_devices_input': '#push-devices-input',
+    'push_topic_dropdown': '#input-4',
+    'push_template_dropdown': '#input-6',
+    'push_send_button': '.btn.update-button.btn-success',
+    'push_success_alert': '.alert-success'
 }
 
 # Browser Configuration

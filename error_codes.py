@@ -18,6 +18,9 @@ class ErrorCode(Enum):
     JSON_PARSING_ERROR = 1009
     BROWSER_CRASH = 1010
     UNKNOWN_ERROR = 1011
+    PUSH_COMMAND_FAILED = 1012
+    SESSION_TIMEOUT = 1013
+    NO_ACTIVE_SESSION = 1014
 
 
 # Error message mapping
@@ -32,7 +35,10 @@ ERROR_MESSAGES = {
     ErrorCode.ELEMENT_WAIT_TIMEOUT: "Timeout waiting for web element",
     ErrorCode.JSON_PARSING_ERROR: "JSON parsing or modification error",
     ErrorCode.BROWSER_CRASH: "Browser crashed during operation",
-    ErrorCode.UNKNOWN_ERROR: "Unknown error occurred"
+    ErrorCode.UNKNOWN_ERROR: "Unknown error occurred",
+    ErrorCode.PUSH_COMMAND_FAILED: "Push command failed",
+    ErrorCode.SESSION_TIMEOUT: "Session timeout",
+    ErrorCode.NO_ACTIVE_SESSION: "No active session"
 }
 
 

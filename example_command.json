@@ -6,6 +6,7 @@
   "fname1": "CSU_ACN",
   "fname2": null,
   "response_option": 1,
-  "option1": "ACK",
+  "option1": null,
+  "response_option2": null,
   "option2": null
 }

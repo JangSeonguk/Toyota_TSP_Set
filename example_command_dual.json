@@ -7,5 +7,6 @@
   "fname2": "CSU_BFD",
   "response_option": 2,
   "option1": "ACK",
+  "response_option2": 2,
   "option2": "NAK"
 }

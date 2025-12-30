@@ -4,6 +4,7 @@ Implements the 8-step web automation workflow
 """
 
 import json
+import time
 from typing import Optional, Tuple, List, Dict, Any
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -12,19 +13,22 @@ import config
 import logger
 from error_codes import ErrorCode, get_error_message
 import browser_manager
+import session_manager
 
 
-def search_vin(vin: str) -> Tuple[bool, Optional[ErrorCode]]:
+def search_vin(vin: str, click_result: bool = True) -> Tuple[bool, Optional[ErrorCode]]:
     """
-    Search for VIN and click first result
+    Search for VIN and optionally click first result
 
     Args:
         vin: VIN search term
+        click_result: If True, click first result row (for initial search).
+                     If False, only display results (for fname2 on same page)
 
     Returns:
         Tuple of (success: bool, error_code or None)
     """
-    logger.log_info(f"Searching for VIN: {vin}")
+    logger.log_info(f"Searching for VIN: {vin} (click_result={click_result})")
 
     browser = browser_manager.get_browser()
     if browser is None:
@@ -45,22 +49,39 @@ def search_vin(vin: str) -> Tuple[bool, Optional[ErrorCode]]:
         vin_input.send_keys(vin)
         vin_input.send_keys(Keys.RETURN)
 
-        # Wait for first result row to be clickable
-        logger.log_info("Waiting for first VIN result to be clickable")
+        # Wait for results to appear
+        logger.log_info("Waiting for VIN search results")
         logger.debug_sleep(config.DEBUG_INTERVAL, "After VIN search")
 
-        success, result_row, error = browser_manager.wait_for_clickable(
-            config.SELECTORS['vin_result_row']
-        )
-        if not success:
-            logger.log_fail(f"VIN result not clickable: {vin}")
-            return False, error
+        # Wait for friendly name table to load
+        import time
+        time.sleep(0.5)  # Brief pause for table to render
 
-        # Click first result
-        logger.log_info("Clicking first VIN result")
-        result_row.click()
+        if click_result:
+            # Initial search: Wait for and click first result row
+            success, result_row, error = browser_manager.wait_for_clickable(
+                config.SELECTORS['vin_result_row']
+            )
+            if not success:
+                logger.log_fail(f"VIN result not clickable: {vin}")
+                return False, error
 
-        logger.log_success(f"VIN search successful: {vin}")
+            logger.log_info("Clicking first VIN result")
+            result_row.click()
+
+            # CRITICAL: Wait for page transition after clicking VIN result
+            # This loads the Friendly Name table page
+            logger.log_info("Waiting for page transition after VIN result click")
+            import time
+            time.sleep(2.0)  # Wait for new page with Friendly Name table to load
+            logger.debug_sleep(config.DEBUG_INTERVAL, "After VIN result click")
+
+            logger.log_success(f"VIN search successful (with click): {vin}")
+        else:
+            # fname2 search: Just verify table is visible (no click needed)
+            # The friendly name table should already be on the same page
+            logger.log_success(f"VIN search successful (table displayed): {vin}")
+
         return True, None
 
     except Exception as e:
@@ -447,9 +468,10 @@ def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dic
             - vin: VIN to search
             - fname1: Primary function name
             - fname2: Optional secondary function name
-            - response_option: Response option (1/2/3)
+            - response_option: Response option for fname1 (1/2/3)
             - option1: Value for fname1 (required if response_option=2)
-            - option2: Value for fname2 (required if fname2 provided and response_option=2)
+            - response_option2: Response option for fname2 (1/2/3)
+            - option2: Value for fname2 (required if fname2 and response_option2=2)
 
     Returns:
         Tuple of (success: bool, result_data or None, error_code or None)
@@ -464,6 +486,7 @@ def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dic
         fname1 = command_data.get('fname1')
         fname2 = command_data.get('fname2')
         response_option = command_data.get('response_option')
+        response_option2 = command_data.get('response_option2')
         option1 = command_data.get('option1')
         option2 = command_data.get('option2')
 
@@ -500,25 +523,32 @@ def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dic
         if fname2:
             logger.log_info("Processing fname2")
 
-            # Navigate back to VIN search or detect state
-            # For now, we'll search for the VIN again
-            success, error = search_vin(vin)
+            if response_option2 is None:
+                response_option2 = response_option
+
+            # After fname1 update, we're back on the same page with VIN input
+            # Search VIN again to display friendly name table (no click needed)
+            success, error = search_vin(vin, click_result=False)
             if not success:
                 return False, None, error
 
-            success, error = process_function_name(fname2, response_option, option2)
+            success, error = process_function_name(fname2, response_option2, option2)
             if not success:
                 logger.log_fail(f"Failed to process fname2: {fname2}")
                 return False, None, error
 
             processed_fnames.append(fname2)
 
+        option1_used = option1 if response_option == 2 else None
+        option2_used = option2 if fname2 and response_option2 == 2 else None
+
         # Build result data
         result_data = {
             'vin': vin,
             'fnames': processed_fnames,
             'response_type': response_option,
-            'options': [option1] if not fname2 else [option1, option2]
+            'response_type2': response_option2 if fname2 else None,
+            'options': [option1_used] if not fname2 else [option1_used, option2_used]
         }
 
         logger.log_success("Automation workflow completed successfully")
@@ -526,4 +556,293 @@ def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dic
 
     except Exception as e:
         logger.log_error("Unexpected error in automation workflow", e)
+        return False, None, ErrorCode.UNKNOWN_ERROR
+
+
+def execute_set_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Execute SET command workflow using stored VIN
+
+    Args:
+        command_data: Command dictionary with keys:
+            - fname: Function name to process
+            - response_option: Response option (1/2/3)
+            - option: Value for JSON modification (required if response_option=2)
+
+    Returns:
+        Tuple of (success: bool, result_data or None, error_code or None)
+    """
+    logger.log_info("Starting SET command workflow")
+
+    # Check for active session
+    if not session_manager.is_session_active():
+        logger.log_fail("No active session for SET command")
+        return False, None, ErrorCode.NO_ACTIVE_SESSION
+
+    try:
+        # Get stored VIN
+        vin = session_manager.get_stored_vin()
+        if not vin:
+            logger.log_fail("No VIN stored in session")
+            return False, None, ErrorCode.NO_ACTIVE_SESSION
+
+        fname = command_data.get('fname')
+        response_option = command_data.get('response_option')
+        option = command_data.get('option')
+
+        logger.log_info(f"SET command: VIN={vin}, fname={fname}, response_option={response_option}")
+
+        browser = browser_manager.get_browser()
+        if browser is None:
+            logger.log_fail("Browser not running")
+            return False, None, ErrorCode.BROWSER_CRASH
+
+        # Step 1: Navigate to tests page (VIN search page)
+        logger.log_info(f"Navigating to {config.TESTS_URL}")
+        browser.get(config.TESTS_URL)
+        time.sleep(1.0)  # Wait for page load
+
+        # Step 2: Search VIN (same as fname2 flow - no click needed)
+        success, error = search_vin(vin, click_result=False)
+        if not success:
+            return False, None, error
+
+        # Step 3: Process function name (search, select option, modify JSON if needed, update)
+        success, error = process_function_name(fname, response_option, option)
+        if not success:
+            logger.log_fail(f"Failed to process fname in SET command: {fname}")
+            return False, None, error
+
+        # Build result data
+        result_data = {
+            'command': 'SET',
+            'vin': vin,
+            'fname': fname,
+            'response_option': response_option,
+            'option': option if response_option == 2 else None
+        }
+
+        logger.log_success(f"SET command completed: fname={fname}")
+        return True, result_data, None
+
+    except Exception as e:
+        logger.log_error("Unexpected error in SET command workflow", e)
+        return False, None, ErrorCode.UNKNOWN_ERROR
+
+
+def execute_push_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Execute PUSH command workflow to send push command to DCM
+
+    Args:
+        command_data: Command dictionary with keys:
+            - topic: Push topic (e.g., "doorlock")
+            - push_template: Push template name (e.g., "CYCL_AHCVT_CMD")
+
+    Returns:
+        Tuple of (success: bool, result_data or None, error_code or None)
+    """
+    logger.log_info("Starting PUSH command workflow")
+
+    # Check for active session
+    if not session_manager.is_session_active():
+        logger.log_fail("No active session for PUSH command")
+        return False, None, ErrorCode.NO_ACTIVE_SESSION
+
+    try:
+        # Get stored VIN
+        vin = session_manager.get_stored_vin()
+        if not vin:
+            logger.log_fail("No VIN stored in session")
+            return False, None, ErrorCode.NO_ACTIVE_SESSION
+
+        topic = command_data.get('topic')
+        push_template = command_data.get('push_template')
+
+        logger.log_info(f"PUSH command: VIN={vin}, topic={topic}, template={push_template}")
+
+        browser = browser_manager.get_browser()
+        if browser is None:
+            logger.log_fail("Browser not running")
+            return False, None, ErrorCode.BROWSER_CRASH
+
+        # Step 1: Navigate to push-command page
+        logger.log_info(f"Navigating to {config.PUSH_COMMAND_URL}")
+        browser.get(config.PUSH_COMMAND_URL)
+        time.sleep(1.5)  # Wait for page load
+
+        # Step 2: Enter VIN in push-devices-input
+        success, devices_input, error = browser_manager.wait_for_element(
+            config.SELECTORS['push_devices_input']
+        )
+        if not success:
+            logger.log_fail("Push devices input not found")
+            return False, None, error
+
+        devices_input.clear()
+        devices_input.send_keys(vin)
+        logger.log_info(f"Entered VIN in push devices input: {vin}")
+        time.sleep(0.5)
+
+        # Step 3: Select topic from dropdown (#input-4)
+        # Format: {vin}/C2V/DESTSW/safety/cmd/{topic}
+        topic_value = f"{vin}/C2V/DESTSW/safety/cmd/{topic}"
+        success, error = _select_dropdown_option(
+            config.SELECTORS['push_topic_dropdown'],
+            topic_value
+        )
+        if not success:
+            logger.log_fail(f"Failed to select topic: {topic_value}")
+            return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+        # Step 4: Select template from dropdown (#input-6)
+        # Format: cmd/{push_template}
+        template_value = f"cmd/{push_template}"
+        success, error = _select_dropdown_option(
+            config.SELECTORS['push_template_dropdown'],
+            template_value
+        )
+        if not success:
+            logger.log_fail(f"Failed to select template: {template_value}")
+            return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+        # Step 5: Click Send button
+        success, send_btn, error = browser_manager.wait_for_clickable(
+            config.SELECTORS['push_send_button']
+        )
+        if not success:
+            logger.log_fail("Send button not found or not clickable")
+            return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+        send_btn.click()
+        logger.log_info("Clicked Send button")
+        time.sleep(1.0)
+
+        # Step 6: Verify success message
+        success, alert, error = browser_manager.wait_for_element(
+            config.SELECTORS['push_success_alert'],
+            timeout=5
+        )
+        if not success:
+            logger.log_fail("Push command did not show success message")
+            return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+        logger.log_success("Push command success alert detected")
+
+        # Build result data
+        result_data = {
+            'command': 'PUSH',
+            'vin': vin,
+            'topic': topic,
+            'push_template': push_template
+        }
+
+        logger.log_success(f"PUSH command completed: topic={topic}, template={push_template}")
+        return True, result_data, None
+
+    except Exception as e:
+        logger.log_error("Unexpected error in PUSH command workflow", e)
+        return False, None, ErrorCode.UNKNOWN_ERROR
+
+
+def _select_dropdown_option(selector: str, value: str) -> Tuple[bool, Optional[ErrorCode]]:
+    """
+    Select an option from a dropdown by value or text
+
+    Args:
+        selector: CSS selector for the dropdown
+        value: Value or text to select
+
+    Returns:
+        Tuple of (success: bool, error_code or None)
+    """
+    browser = browser_manager.get_browser()
+    if browser is None:
+        return False, ErrorCode.BROWSER_CRASH
+
+    try:
+        # Wait for dropdown to be clickable
+        success, dropdown, error = browser_manager.wait_for_clickable(selector)
+        if not success:
+            return False, error
+
+        # Click to open dropdown
+        dropdown.click()
+        time.sleep(0.3)
+
+        # Try to find and click the option
+        # First try: look for option with matching value
+        try:
+            option = browser.find_element(
+                By.CSS_SELECTOR,
+                f'{selector} option[value="{value}"]'
+            )
+            option.click()
+            logger.log_info(f"Selected dropdown option by value: {value}")
+            return True, None
+        except:
+            pass
+
+        # Second try: look for option containing the text
+        try:
+            options = browser.find_elements(By.CSS_SELECTOR, f'{selector} option')
+            for option in options:
+                if value in option.text or value in option.get_attribute('value'):
+                    option.click()
+                    logger.log_info(f"Selected dropdown option by text: {value}")
+                    return True, None
+        except:
+            pass
+
+        # Third try: use Select class
+        try:
+            from selenium.webdriver.support.ui import Select
+            select = Select(dropdown)
+            select.select_by_visible_text(value)
+            logger.log_info(f"Selected dropdown option via Select: {value}")
+            return True, None
+        except:
+            pass
+
+        logger.log_fail(f"Could not find dropdown option: {value}")
+        return False, ErrorCode.ELEMENT_WAIT_TIMEOUT
+
+    except Exception as e:
+        logger.log_error(f"Error selecting dropdown option: {value}", e)
+        return False, ErrorCode.UNKNOWN_ERROR
+
+
+def execute_close_command() -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Execute CLOSE command workflow to close browser session
+
+    Returns:
+        Tuple of (success: bool, result_data or None, error_code or None)
+    """
+    logger.log_info("Starting CLOSE command workflow")
+
+    try:
+        # Get VIN before closing (for response)
+        vin = session_manager.get_stored_vin()
+
+        # Close the session
+        session_manager.close_session()
+        logger.log_info("Session closed")
+
+        # Stop the browser
+        browser_manager.stop_browser()
+        logger.log_info("Browser stopped")
+
+        # Build result data
+        result_data = {
+            'command': 'CLOSE',
+            'vin': vin,
+            'message': 'Session closed'
+        }
+
+        logger.log_success("CLOSE command completed")
+        return True, result_data, None
+
+    except Exception as e:
+        logger.log_error("Unexpected error in CLOSE command workflow", e)
         return False, None, ErrorCode.UNKNOWN_ERROR

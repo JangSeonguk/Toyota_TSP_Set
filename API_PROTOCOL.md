@@ -82,8 +82,29 @@ tsp_auto.exe --port 8080 --debug
   "password": "string",
   "vin": "string",
   "fname1": "string",
-  "response_option": 1,
+  "response_option": 1
+}
+```
+
+**response_option=2일 때 추가 필드**:
+```json
+{
   "option1": "string"
+}
+```
+
+**fname2 사용 시 추가 필드**:
+```json
+{
+  "fname2": "string",
+  "response_option2": 1
+}
+```
+
+**fname2 + response_option2=2일 때 추가 필드**:
+```json
+{
+  "option2": "string"
 }
 ```
 
@@ -98,6 +119,7 @@ tsp_auto.exe --port 8080 --debug
   "fname2": "OPTIONAL_FUNC",
   "response_option": 2,
   "option1": "ACK",
+  "response_option2": 2,
   "option2": "NACK"
 }
 ```
@@ -110,13 +132,14 @@ tsp_auto.exe --port 8080 --debug
 | `id` | string | ✅ | 로그인 아이디 | `"lge_1"` |
 | `password` | string | ✅ | 로그인 비밀번호 | `"password123"` |
 | `vin` | string | ✅ | 차량 VIN 번호 (17자리) | `"KMHXX00XXXX000000"` |
-| `fname1` | string | ✅ | 1차 함수명 | `"CSU_ACN"` |
-| `fname2` | string | ❌ | 2차 함수명 (선택) | `"FUNC2"` 또는 `null` |
-| `response_option` | integer | ✅ | 응답 옵션: 1, 2, 3 | `1` |
-| `option1` | string | ✅ | fname1의 옵션 값 | `"ACK"` |
-| `option2` | string | ❌ | fname2의 옵션 값 (fname2와 response_option=2일 때 필수) | `"NACK"` 또는 `null` |
+| `fname1` | string | ✅ | 1차 함수명 | `"ACN"` |
+| `fname2` | string | ❌ | 2차 함수명 (선택) | `"ACN_VCT"`|
+| `response_option` | integer | ✅ | fname1 응답 옵션: 1, 2, 3 | `2` |
+| `option1` | string | ❌ | fname1 옵션 값 (response_option=2일 때만 사용) | `"ACK"` |
+| `response_option2` | integer | ❌ | fname2 응답 옵션: 1, 2, 3 (fname2가 있을 때 사용) | `1` |
+| `option2` | string | ❌ | fname2 옵션 값 (fname2 있고 response_option2=2일 때만 사용) | `"NACK"` |
 
-**response_option 값**:
+**response_option / response_option2 값**:
 - `1`: **Default** - 기본 응답 옵션 (라디오 버튼 1번)
 - `2`: **Custom** - 커스텀 응답 옵션 (라디오 버튼 2번, JSON 수정 필요)
 - `3`: **No Response** - 무응답 옵션 (라디오 버튼 3번)
@@ -124,8 +147,12 @@ tsp_auto.exe --port 8080 --debug
 **검증 규칙**:
 1. `command`는 반드시 `"START"` 또는 `"STOP"`
 2. `response_option`은 반드시 1, 2, 3 중 하나 (정수)
-3. `fname2`가 있고 `response_option=2`이면 `option2` 필수
-4. 모든 문자열은 빈 문자열 불가 (null은 가능)
+3. `response_option=2`일 때만 `option1` 사용/검증
+4. `fname2`가 있고 `response_option2=2`이면 `option2` 필수
+5. `response_option`이 1 또는 3이면 `option1`은 무시
+6. `response_option2`가 1 또는 3이면 `option2`는 무시
+7. `fname2`가 있고 `response_option2`가 없으면 `response_option`을 기본값으로 사용
+8. 모든 문자열은 빈 문자열 불가 (null은 가능)
 
 #### 2. STOP 명령 (서버 종료)
 
@@ -152,6 +179,7 @@ tsp_auto.exe --port 8080 --debug
   "vin": "KMHXX00XXXX000000",
   "fnames": ["CSU_ACN", "FUNC2"],
   "response_type": 2,
+  "response_type2": 1,
   "options": ["ACK", "NACK"],
   "timestamp": "2025-10-13T10:30:45.123456Z"
 }
@@ -165,6 +193,7 @@ tsp_auto.exe --port 8080 --debug
 | `vin` | string | 처리된 VIN | `"KMHXX00XXXX000000"` |
 | `fnames` | array[string] | 처리된 함수명 목록 | `["CSU_ACN", "FUNC2"]` |
 | `response_type` | integer | 사용된 응답 옵션 (1/2/3) | `2` |
+| `response_type2` | integer | fname2 응답 옵션 (1/2/3, fname2 있을 때) | `1` |
 | `options` | array[string] | 사용된 옵션 값 목록 | `["ACK", "NACK"]` |
 | `timestamp` | string | 처리 완료 시각 (ISO 8601, UTC) | `"2025-10-13T10:30:45.123456Z"` |
 
@@ -199,7 +228,7 @@ tsp_auto.exe --port 8080 --debug
 | `1001` | TCP_CONNECTION_ERROR | TCP 연결 오류 | 서버 연결 상태 확인 |
 | `1002` | LOGIN_FAILURE | 로그인 실패 (2회 재시도 후) | 아이디/비밀번호 확인 |
 | `1003` | INVALID_COMMAND_FORMAT | 잘못된 명령 포맷 | JSON 포맷 및 필수 필드 확인 |
-| `1004` | MISSING_REQUIRED_PARAMS | 필수 파라미터 누락 | 필수 필드 확인 (id, password, vin, fname1, response_option, option1) |
+| `1004` | MISSING_REQUIRED_PARAMS | 필수 파라미터 누락 | 필수 필드 확인 (id, password, vin, fname1, response_option) |
 | `1005` | VIN_NOT_FOUND | VIN을 찾을 수 없음 | VIN 번호 확인 (17자리) |
 | `1006` | FUNCTION_NAME_NOT_FOUND | 함수명을 찾을 수 없음 | 함수명 철자 확인 |
 | `1007` | INVALID_RESPONSE_OPTION | 잘못된 response_option 값 | response_option은 1, 2, 3 중 하나 |
@@ -258,7 +287,7 @@ tsp_auto.exe --port 8080 --debug
     |----(5) 연결 종료------------------->|
 ```
 
-### 시나리오 2: 이중 함수 처리 (Custom 옵션)
+### 시나리오 2: 이중 함수 처리 (Custom 옵션, 순차 처리)
 
 ```
 클라이언트                              서버
@@ -272,10 +301,13 @@ tsp_auto.exe --port 8080 --debug
     |         "fname2": "FUNC2",          |--- fname1 처리
     |         "response_option": 2,       |
     |         "option1": "ACK",           |--- JSON 수정 (option1="ACK")
-    |         "option2": "NACK"           |
-    |       }                             |--- fname2 처리
-    |                                     |
+    |         "option2": "NACK"           |--- 업데이트 버튼 클릭
+    |       }                             |
+    |                                     |--- VIN 입력 화면 복귀
+    |                                     |--- VIN 재검색 (click_result=False)
+    |                                     |--- fname2 처리
     |                                     |--- JSON 수정 (option2="NACK")
+    |                                     |--- 업데이트 버튼 클릭
     |                                     |
     |<---(3) 성공 응답---------------------|
     |       {                             |

@@ -1,0 +1,9 @@
+{
+  "command": "START",
+  "id": "lge_1",
+  "password": "xxx",
+  "vin": "KMHXX00XXXX000000",
+  "fname1": "CSU_ACN",
+  "response_option": 1,
+  "add_request": true
+}

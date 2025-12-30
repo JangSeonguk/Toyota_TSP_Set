@@ -4,8 +4,10 @@ Main entry point for the automation system
 """
 
 import argparse
+import socket
 import sys
 import threading
+import time
 from typing import Optional, Dict, Any
 
 import config
@@ -13,6 +15,7 @@ import logger
 import browser_manager
 import automation_workflow
 import response_handler
+import session_manager
 from tcp_server import TCPServer
 from command_processor import CommandQueue, validate_command, parse_command_json
 from error_codes import ErrorCode
@@ -31,11 +34,11 @@ def parse_arguments():
         epilog='''
 Examples:
   TCP Mode:
-    python browser_module.py --port 5000 --debug
+    tsp_auto.exe --port 5000 --debug
 
   Command-Line Mode:
-    python browser_module.py --id lge_1 --password xxx --vin KMHXX00XXXX000000
-                             --fname1 CSU_ACN --response 1 --opt1 ACK --debug
+    tsp_auto.exe --id lge_1 --password xxx --vin KMHXX00XXXX000000
+                 --fname1 CSU_ACN --response 1 --opt1 ACK --debug
         '''
     )
 
@@ -87,6 +90,14 @@ Examples:
     )
 
     parser.add_argument(
+        '--response2',
+        type=int,
+        choices=[1, 2, 3],
+        default=None,
+        help='Response option for fname2: 1=default, 2=custom, 3=no_response (command-line mode)'
+    )
+
+    parser.add_argument(
         '--opt1',
         type=str,
         help='Type value for fname1 when response=2 (command-line mode)'
@@ -111,19 +122,29 @@ Examples:
     # Validate command-line mode requirements
     if args.id and args.password:
         # Command-line mode
-        required_cli_args = ['vin', 'fname1', 'response', 'opt1']
+        required_cli_args = ['vin', 'fname1', 'response']
         missing_args = [arg for arg in required_cli_args if not getattr(args, arg)]
 
         if missing_args:
-            parser.error(f"Command-line mode requires: --id, --password, --vin, --fname1, --response, --opt1. Missing: {', --'.join(missing_args)}")
+            parser.error(f"Command-line mode requires: --id, --password, --vin, --fname1, --response. Missing: {', --'.join(missing_args)}")
 
         # Validate response option 2 requires opt1
         if args.response == 2 and not args.opt1:
             parser.error("--opt1 is required when --response is 2")
 
-        # Validate fname2 requires opt2 if response is 2
-        if args.fname2 and args.response == 2 and not args.opt2:
-            parser.error("--opt2 is required when --fname2 is provided and --response is 2")
+        if args.response in [1, 3]:
+            args.opt1 = None
+
+        # Default response2 to response when fname2 is provided
+        if args.fname2 and args.response2 is None:
+            args.response2 = args.response
+
+        # Validate fname2 requires opt2 if response2 is 2
+        if args.fname2 and args.response2 == 2 and not args.opt2:
+            parser.error("--opt2 is required when --fname2 is provided and --response2 is 2")
+
+        if args.response2 in [1, 3]:
+            args.opt2 = None
 
     return args
 
@@ -161,6 +182,7 @@ def run_command_line_mode(args: argparse.Namespace):
             'fname1': args.fname1,
             'fname2': args.fname2,
             'response_option': args.response,
+            'response_option2': args.response2,
             'option1': args.opt1,
             'option2': args.opt2
         }
@@ -174,7 +196,8 @@ def run_command_line_mode(args: argparse.Namespace):
                 result_data['vin'],
                 result_data['fnames'],
                 result_data['response_type'],
-                result_data['options']
+                result_data['options'],
+                result_data.get('response_type2')
             )
         else:
             response = response_handler.create_error_response(error_code)
@@ -235,11 +258,14 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
             # Handle STOP command
             if command.get('command') == 'STOP':
                 logger.log_info("STOP command received")
+                # Close any active session
+                session_manager.close_session()
                 response = response_handler.create_success_response(
                     vin="N/A",
                     fnames=[],
                     response_type=0,
-                    options=[]
+                    options=[],
+                    response_type2=None
                 )
                 response['message'] = 'Stopping server'
                 tcp_server.send_response(response)
@@ -257,12 +283,65 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
                         result_data['vin'],
                         result_data['fnames'],
                         result_data['response_type'],
-                        result_data['options']
+                        result_data['options'],
+                        result_data.get('response_type2')
                     )
+
+                    # Check if add_request mode is enabled
+                    add_request = command.get('add_request', False)
+                    if add_request:
+                        vin = result_data['vin']
+                        # Start session for add_request mode (no timeout)
+                        session_manager.start_session(vin)
+                        response['add_request'] = True
+                        logger.log_info(f"add_request mode enabled: VIN={vin}")
                 else:
                     response = response_handler.create_error_response(error_code)
 
                 # Send response
+                tcp_server.send_response(response)
+
+            # Handle SET command
+            elif command.get('command') == 'SET':
+                success, result_data, error_code = automation_workflow.execute_set_command(command)
+
+                if success:
+                    response = response_handler.create_set_response(
+                        result_data['vin'],
+                        result_data['fname'],
+                        result_data['response_option'],
+                        result_data.get('option')
+                    )
+                else:
+                    response = response_handler.create_error_response(error_code)
+
+                tcp_server.send_response(response)
+
+            # Handle PUSH command
+            elif command.get('command') == 'PUSH':
+                success, result_data, error_code = automation_workflow.execute_push_command(command)
+
+                if success:
+                    response = response_handler.create_push_response(
+                        result_data['vin'],
+                        result_data['topic'],
+                        result_data['push_template']
+                    )
+                else:
+                    response = response_handler.create_error_response(error_code)
+
+                tcp_server.send_response(response)
+
+            # Handle CLOSE command
+            elif command.get('command') == 'CLOSE':
+                vin = session_manager.get_stored_vin()
+                success, result_data, error_code = automation_workflow.execute_close_command()
+
+                if success:
+                    response = response_handler.create_close_response(vin)
+                else:
+                    response = response_handler.create_error_response(error_code)
+
                 tcp_server.send_response(response)
 
         except Exception as e:
@@ -319,8 +398,12 @@ def run_tcp_mode(args: argparse.Namespace):
 
             # Process commands from this client
             while tcp_server.is_client_connected() and not stop_event.is_set():
-                # Receive command
-                command_str = tcp_server.receive_command()
+                # Receive command (blocking until command received)
+                try:
+                    command_str = tcp_server.receive_command(timeout=5.0)
+                except socket.timeout:
+                    # No command received - continue waiting
+                    continue
 
                 if command_str is None:
                     # Client disconnected or error
@@ -350,6 +433,16 @@ def run_tcp_mode(args: argparse.Namespace):
                     tcp_server.send_response(error_response)
                     continue
 
+                # Check for session-dependent commands without active session
+                cmd_type = command_dict.get('command')
+                if cmd_type in ['SET', 'PUSH'] and not session_manager.is_session_active():
+                    error_response = response_handler.create_error_response(
+                        ErrorCode.NO_ACTIVE_SESSION,
+                        f"No active session for {cmd_type} command"
+                    )
+                    tcp_server.send_response(error_response)
+                    continue
+
                 # Enqueue command for processing
                 command_queue.enqueue(command_dict)
 
@@ -359,11 +452,17 @@ def run_tcp_mode(args: argparse.Namespace):
                     stop_event.wait(timeout=30)
                     break
 
+                # If CLOSE command, session will be closed by worker
+                if command_dict.get('command') == 'CLOSE':
+                    logger.log_info("CLOSE command enqueued")
+
     except KeyboardInterrupt:
         logger.log_info("TCP server interrupted by user")
     finally:
         logger.log_info("Shutting down TCP server...")
         stop_event.set()
+        # Close any active session
+        session_manager.close_session()
         worker_thread.join(timeout=5)
         tcp_server.stop()
         browser_manager.stop_browser()

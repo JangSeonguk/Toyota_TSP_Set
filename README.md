@@ -52,20 +52,19 @@ pip install selenium webdriver-manager ipykernel
 명령줄에서 직접 자동화를 실행합니다:
 
 ```bash
-python browser_module.py \
+tsp_auto.exe \
   --id your_username \
   --password your_password \
   --vin KMHXX00XXXX000000 \
   --fname1 CSU_ACN \
   --response 1 \
-  --opt1 ACK \
   --debug
 ```
 
 **fname2 포함 예제:**
 
 ```bash
-python browser_module.py \
+tsp_auto.exe \
   --id your_username \
   --password your_password \
   --vin KMHXX00XXXX000000 \
@@ -73,8 +72,13 @@ python browser_module.py \
   --fname2 CSU_ACN/VCT \
   --response 2 \
   --opt1 ACK \
+  --response2 2 \
   --opt2 NACK \
   --debug
+
+**옵션 규칙:**
+- `--response`가 1 또는 3이면 `--opt1`은 무시됩니다.
+- `--response2`가 1 또는 3이면 `--opt2`는 무시됩니다.
 ```
 
 ### 2. TCP 서버 모드 (프로덕션)
@@ -82,7 +86,7 @@ python browser_module.py \
 TCP 서버를 시작하고 명령을 대기합니다:
 
 ```bash
-python browser_module.py --port 5000 --debug
+tsp_auto.exe --port 5000 --debug
 ```
 
 **TCP 클라이언트에서 명령 전송:**
@@ -110,8 +114,7 @@ command = {
     "password": "your_password",
     "vin": "KMHXX00XXXX000000",
     "fname1": "CSU_ACN",
-    "response_option": 1,
-    "option1": "ACK"
+    "response_option": 1
 }
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -136,6 +139,7 @@ sock.close()
   "fname2": "CSU_ACN/VCT",
   "response_option": 2,
   "option1": "ACK",
+  "response_option2": 2,
   "option2": "NACK"
 }
 ```
@@ -146,12 +150,17 @@ sock.close()
 - `password`: 로그인 비밀번호
 - `vin`: VIN 검색어
 - `fname1`: 첫 번째 함수명
-- `response_option`: 응답 옵션 (1=default, 2=custom, 3=no_response)
-- `option1`: fname1의 타입 값
+- `response_option`: fname1 응답 옵션 (1=default, 2=custom, 3=no_response)
 
 **선택 파라미터:**
 - `fname2`: 두 번째 함수명 (선택)
-- `option2`: fname2의 타입 값 (fname2가 있고 response_option=2일 때 필수)
+- `option1`: fname1의 타입 값 (response_option=2일 때만 사용)
+- `response_option2`: fname2 응답 옵션 (1=default, 2=custom, 3=no_response)
+- `option2`: fname2의 타입 값 (fname2가 있고 response_option2=2일 때 필수)
+
+**동작 규칙:**
+- `response_option`이 1 또는 3이면 `option1`은 무시됩니다.
+- `response_option2`가 1 또는 3이면 `option2`는 무시됩니다.
 
 ### STOP 명령
 
@@ -173,6 +182,7 @@ sock.close()
   "vin": "KMHXX00XXXX000000",
   "fnames": ["CSU_ACN", "CSU_ACN/VCT"],
   "response_type": 2,
+  "response_type2": 1,
   "options": ["ACK", "NACK"],
   "timestamp": "2025-10-13T15:30:00.123Z"
 }
@@ -240,7 +250,10 @@ tsp_auto/
 4. **응답 옵션 선택**: 라디오 버튼 선택 (1/2/3)
 5. **JSON 수정** (response_option=2인 경우): `header.message.type` 값 변경
 6. **업데이트**: 업데이트 버튼 클릭
-7. **fname2 처리** (제공된 경우): 3-6 단계 반복
+7. **fname2 처리** (제공된 경우):
+   - 업데이트 후 VIN 입력 화면으로 복귀 대기
+   - 동일 VIN 재검색 (click_result=False, 테이블만 표시)
+   - fname2에 대해 3-6 단계 반복
 8. **응답 반환**: 성공/에러 JSON 응답
 
 ## 테스트
@@ -288,7 +301,7 @@ Total: 4 | Passed: 4 | Failed: 0
 
 **터미널 1 - 실제 서버 시작:**
 ```bash
-python browser_module.py --port 5000 --debug
+tsp_auto.exe --port 5000 --debug
 ```
 
 **터미널 2 - Interactive 클라이언트:**
@@ -335,7 +348,7 @@ python tcp_client_example.py interactive
 ### 디버그 모드 활성화
 
 ```bash
-python browser_module.py --debug
+tsp_auto.exe --debug
 ```
 
 실시간 로그가 `[INFO]`, `[SUCCESS]`, `[FAIL]` 접두사와 함께 출력됩니다.
@@ -356,7 +369,11 @@ python browser_module.py --debug
   - `search_vin()`: 결과 로드를 위한 명시적 대기
   - `search_function_name()`: 테이블 로드를 위한 폴링 대기 (최대 10초)
   - `process_function_name()`: 페이지 안정화 시간 최소화 (2s → 0.5s)
-  - `click_update_button()`: 전환 대기 최소화 (2s → 0.5s)
+  - `click_update_button()`: 전환 대기 최소화 (2s → 1.0s)
+
+- **fname2 처리**: 단일 브라우저에서 순차 처리 방식 구현
+  - fname1 완료 → VIN 입력 화면 복귀 → VIN 재검색 (click_result=False) → fname2 처리
+  - 브라우저 안정성 향상 (병렬 처리 대비)
 
 - **TCP 클라이언트**: Interactive 모드 및 JSON 파일 로드 지원
 - **테스트 도구**: Mock 서버와 자동화된 연결 테스트 추가

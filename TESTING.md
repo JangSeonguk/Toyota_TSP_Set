@@ -179,7 +179,7 @@ Mock 서버 대신 실제 브라우저 자동화 서버를 테스트하려면:
 
 ### 1. 실제 서버 시작
 ```bash
-python browser_module.py
+tsp_auto.exe
 ```
 
 ### 2. 자동 테스트 실행

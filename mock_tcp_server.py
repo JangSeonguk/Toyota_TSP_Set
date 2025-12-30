@@ -141,7 +141,7 @@ class MockTCPServer:
             }
 
         # Validate START command parameters
-        required_params = ['id', 'password', 'vin', 'fname1', 'response_option', 'option1']
+        required_params = ['id', 'password', 'vin', 'fname1', 'response_option']
 
         for param in required_params:
             if param not in command or command[param] is None:
@@ -160,26 +160,53 @@ class MockTCPServer:
                 "error_message": get_error_message(ErrorCode.INVALID_RESPONSE_OPTION, f"Got: {response_option}")
             }
 
-        # Validate fname2/option2 consistency
+        # Validate option1 usage
+        option1 = command.get('option1')
+        if response_option == 2:
+            if not option1:
+                return {
+                    "result": "error",
+                    "error_code": ErrorCode.MISSING_REQUIRED_PARAMS.value,
+                    "error_message": get_error_message(ErrorCode.MISSING_REQUIRED_PARAMS, "option1 required")
+                }
+        else:
+            option1 = None
+
+        # Validate fname2/response_option2/option2 consistency
         fname2 = command.get('fname2')
         option2 = command.get('option2')
+        response_option2 = command.get('response_option2')
 
-        if fname2 and response_option == 2 and not option2:
-            return {
-                "result": "error",
-                "error_code": ErrorCode.MISSING_REQUIRED_PARAMS.value,
-                "error_message": get_error_message(ErrorCode.MISSING_REQUIRED_PARAMS, "option2 required")
-            }
+        if fname2:
+            if response_option2 is None:
+                response_option2 = response_option
+
+            if response_option2 not in [1, 2, 3]:
+                return {
+                    "result": "error",
+                    "error_code": ErrorCode.INVALID_RESPONSE_OPTION.value,
+                    "error_message": get_error_message(ErrorCode.INVALID_RESPONSE_OPTION, f"Got: {response_option2}")
+                }
+
+            if response_option2 == 2:
+                if not option2:
+                    return {
+                        "result": "error",
+                        "error_code": ErrorCode.MISSING_REQUIRED_PARAMS.value,
+                        "error_message": get_error_message(ErrorCode.MISSING_REQUIRED_PARAMS, "option2 required")
+                    }
+            else:
+                option2 = None
 
         # Generate success response
         fnames = [command['fname1']]
-        options = [command.get('option1')]
+        options = [option1]
 
         if fname2:
             fnames.append(fname2)
             options.append(option2)
 
-        return {
+        response = {
             "result": "success",
             "vin": command['vin'],
             "fnames": fnames,
@@ -188,6 +215,9 @@ class MockTCPServer:
             "timestamp": "2025-01-01T00:00:00.000Z",
             "mock": True
         }
+        if fname2:
+            response["response_type2"] = response_option2
+        return response
 
     def send_response(self, sock: socket.socket, response: Dict[str, Any]):
         """

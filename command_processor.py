@@ -83,7 +83,8 @@ def validate_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional[Error
     if not command_type:
         return False, ErrorCode.INVALID_COMMAND_FORMAT, "Missing 'command' field"
 
-    if command_type not in ['START', 'STOP']:
+    valid_commands = ['START', 'STOP', 'SET', 'PUSH', 'CLOSE']
+    if command_type not in valid_commands:
         return False, ErrorCode.INVALID_COMMAND_FORMAT, f"Invalid command type: {command_type}"
 
     # STOP command requires no additional validation
@@ -91,8 +92,21 @@ def validate_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional[Error
         logger.log_info("STOP command validated")
         return True, None, None
 
+    # CLOSE command requires no additional validation
+    if command_type == 'CLOSE':
+        logger.log_info("CLOSE command validated")
+        return True, None, None
+
+    # SET command validation
+    if command_type == 'SET':
+        return _validate_set_command(command_dict)
+
+    # PUSH command validation
+    if command_type == 'PUSH':
+        return _validate_push_command(command_dict)
+
     # Validate START command parameters
-    required_params = ['id', 'password', 'vin', 'fname1', 'response_option', 'option1']
+    required_params = ['id', 'password', 'vin', 'fname1', 'response_option']
 
     for param in required_params:
         if param not in command_dict or command_dict[param] is None:
@@ -103,14 +117,105 @@ def validate_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional[Error
     if response_option not in [1, 2, 3]:
         return False, ErrorCode.INVALID_RESPONSE_OPTION, f"response_option must be 1, 2, or 3, got: {response_option}"
 
-    # Validate fname2 and option2 consistency
+    # Validate option1 usage
+    if response_option == 2:
+        if not command_dict.get('option1'):
+            return False, ErrorCode.MISSING_REQUIRED_PARAMS, "option1 required when response_option is 2"
+    else:
+        # Ignore option1 for response_option 1 or 3
+        command_dict['option1'] = None
+
+    # Validate fname2 and response_option2/option2 consistency
     fname2 = command_dict.get('fname2')
     option2 = command_dict.get('option2')
+    response_option2 = command_dict.get('response_option2')
 
-    if fname2 and response_option == 2 and not option2:
-        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "option2 required when fname2 is provided and response_option is 2"
+    if fname2:
+        if response_option2 is None:
+            # Backward-compatible default when response_option2 is omitted
+            response_option2 = response_option
+            command_dict['response_option2'] = response_option2
 
-    logger.log_info(f"START command validated: VIN={command_dict.get('vin')}, fname1={command_dict.get('fname1')}")
+        if response_option2 not in [1, 2, 3]:
+            return False, ErrorCode.INVALID_RESPONSE_OPTION, (
+                f"response_option2 must be 1, 2, or 3, got: {response_option2}"
+            )
+
+        if response_option2 == 2:
+            if not option2:
+                return False, ErrorCode.MISSING_REQUIRED_PARAMS, (
+                    "option2 required when fname2 is provided and response_option2 is 2"
+                )
+        else:
+            # Ignore option2 for response_option2 1 or 3
+            command_dict['option2'] = None
+    else:
+        command_dict['response_option2'] = None
+        command_dict['option2'] = None
+
+    # Validate add_request option (optional, defaults to False)
+    add_request = command_dict.get('add_request', False)
+    if not isinstance(add_request, bool):
+        return False, ErrorCode.INVALID_COMMAND_FORMAT, "add_request must be a boolean"
+
+    # Note: timeout parameter is ignored (no session timeout)
+
+    logger.log_info(f"START command validated: VIN={command_dict.get('vin')}, fname1={command_dict.get('fname1')}, add_request={add_request}")
+    return True, None, None
+
+
+def _validate_set_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional[ErrorCode], Optional[str]]:
+    """
+    Validate SET command parameters
+
+    Args:
+        command_dict: Command dictionary
+
+    Returns:
+        Tuple of (is_valid: bool, error_code or None, error_detail or None)
+    """
+    # Required parameters for SET command
+    fname = command_dict.get('fname')
+    if not fname:
+        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: fname"
+
+    response_option = command_dict.get('response_option')
+    if response_option is None:
+        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: response_option"
+
+    if response_option not in [1, 2, 3]:
+        return False, ErrorCode.INVALID_RESPONSE_OPTION, f"response_option must be 1, 2, or 3, got: {response_option}"
+
+    # option is required when response_option is 2
+    if response_option == 2:
+        option = command_dict.get('option')
+        if not option:
+            return False, ErrorCode.MISSING_REQUIRED_PARAMS, "option required when response_option is 2"
+
+    logger.log_info(f"SET command validated: fname={fname}, response_option={response_option}")
+    return True, None, None
+
+
+def _validate_push_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional[ErrorCode], Optional[str]]:
+    """
+    Validate PUSH command parameters
+
+    Args:
+        command_dict: Command dictionary
+
+    Returns:
+        Tuple of (is_valid: bool, error_code or None, error_detail or None)
+    """
+    # Required parameters for PUSH command
+    topic = command_dict.get('topic')
+    if not topic:
+        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: topic"
+
+    push_template = command_dict.get('push_template')
+    if not push_template:
+        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: push_template"
+
+    logger.log_info(f"PUSH command validated: topic={topic}, push_template={push_template}")
     return True, None, None
 
 

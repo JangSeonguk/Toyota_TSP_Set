@@ -21,8 +21,7 @@
   "password": "your_password",
   "vin": "KMHXX00XXXX000000",
   "fname1": "CSU_ACN",
-  "response_option": 1,
-  "option1": "ACK"
+  "response_option": 1
 }
 ```
 
@@ -38,6 +37,7 @@
   "fname2": "SECOND_FUNC",
   "response_option": 2,
   "option1": "ACK",
+  "response_option2": 2,
   "option2": "NACK"
 }
 ```
@@ -90,14 +90,22 @@
 | `vin` | ✅ | string | 차량 VIN (17자리) | `"KMHXX00..."` |
 | `fname1` | ✅ | string | 1차 함수명 | `"CSU_ACN"` |
 | `fname2` | ❌ | string/null | 2차 함수명 | `"FUNC2"` |
-| `response_option` | ✅ | integer | 1, 2, 3 중 선택 | `1` |
-| `option1` | ✅ | string | fname1 옵션값 | `"ACK"` |
-| `option2` | ❌ | string/null | fname2 옵션값 (fname2 있고 response_option=2면 필수) | `"NACK"` |
+| `response_option` | ✅ | integer | fname1 응답 옵션 (1, 2, 3) | `1` |
+| `option1` | ❌ | string | fname1 옵션값 (response_option=2일 때만 사용) | `"ACK"` |
+| `response_option2` | ❌ | integer | fname2 응답 옵션 (1, 2, 3) | `1` |
+| `option2` | ❌ | string/null | fname2 옵션값 (fname2 있고 response_option2=2면 필수) | `"NACK"` |
 
-**response_option**:
+**response_option / response_option2**:
 - `1` = Default (기본값)
 - `2` = Custom (JSON 수정)
 - `3` = No Response (무응답)
+
+**무시 규칙**:
+- `response_option`이 1 또는 3이면 `option1`은 무시됨
+- `response_option2`가 1 또는 3이면 `option2`는 무시됨
+
+**기본값 규칙**:
+- `fname2`가 있고 `response_option2`가 없으면 `response_option` 값이 적용됨
 
 ---
 
@@ -131,7 +139,8 @@ command = {
     "fname1": "CSU_ACN",
     "fname2": None,
     "response_option": 1,
-    "option1": "ACK",
+    "option1": None,
+    "response_option2": None,
     "option2": None
 }
 
@@ -159,7 +168,8 @@ print(response)
 - [ ] `response_option`은 정수 (문자열 아님)
 - [ ] 선택 필드는 `null` (빈 문자열 아님)
 - [ ] VIN은 17자리
-- [ ] `fname2` + `response_option=2`이면 `option2` 필수
+- [ ] `response_option=2`이면 `option1` 필요
+- [ ] `fname2` + `response_option2=2`이면 `option2` 필요
 
 **서버 실행**:
 ```bash

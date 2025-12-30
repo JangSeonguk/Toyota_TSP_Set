@@ -178,7 +178,7 @@ def test_missing_params(host: str, port: int) -> bool:
     command = {
         "command": "START",
         "id": "test_user"
-        # Missing: password, vin, fname1, response_option, option1
+        # Missing: password, vin, fname1, response_option
     }
 
     response = send_and_receive(host, port, command, timeout=5.0)

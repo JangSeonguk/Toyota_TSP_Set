@@ -1,22 +1,12 @@
 """
-TCP Client Example
-Demonstrates how to send commands to the browser automation module via TCP
+TCP Client for TSP Auto
+Sends JSON command file to tsp_auto.exe server
 
-Usage Examples:
-    # Send a START command with test data
-    python tcp_client_example.py test
+Usage:
+    python tcp_client_example.py <json_file_path>
 
-    # Send a real START command (edit the script first!)
-    python tcp_client_example.py start
-
-    # Send a STOP command
-    python tcp_client_example.py stop
-
-    # Send a custom command from JSON file
-    python tcp_client_example.py custom <json_file>
-
-    # Interactive mode
-    python tcp_client_example.py interactive
+Example:
+    python tcp_client_example.py example_command.json
 """
 
 import socket
@@ -98,205 +88,72 @@ def load_command_from_file(filepath: str) -> dict:
         return None
 
 
-def interactive_mode(host: str, port: int):
-    """
-    Interactive mode for building and sending commands
-
-    Args:
-        host: Server hostname or IP
-        port: Server port
-    """
-    print("\n" + "=" * 60)
-    print("INTERACTIVE MODE")
-    print("=" * 60)
-
-    # Choose command type
-    print("\nSelect command type:")
-    print("  1. START - Begin automation")
-    print("  2. STOP - Stop server")
-    choice = input("Enter choice (1-2): ").strip()
-
-    if choice == "2":
-        command = {"command": "STOP"}
-        print("\nSending STOP command...")
-        send_command(host, port, command)
-        return
-
-    if choice != "1":
-        print("Invalid choice")
-        return
-
-    # Build START command
-    print("\n" + "-" * 60)
-    print("Building START command")
-    print("-" * 60)
-
-    user_id = input("Enter username: ").strip()
-    password = input("Enter password: ").strip()
-    vin = input("Enter VIN: ").strip()
-    fname1 = input("Enter primary function name (fname1): ").strip()
-
-    fname2_input = input("Enter secondary function name (fname2) [optional, press Enter to skip]: ").strip()
-    fname2 = fname2_input if fname2_input else None
-
-    print("\nResponse options:")
-    print("  1 - Default response")
-    print("  2 - Custom response (requires option value)")
-    print("  3 - No response")
-    response_option = int(input("Enter response option (1-3): ").strip())
-
-    option1 = None
-    option2 = None
-
-    if response_option == 2:
-        option1 = input("Enter option1 value (for fname1): ").strip()
-        if fname2:
-            option2 = input("Enter option2 value (for fname2): ").strip()
-    elif response_option == 1:
-        option1 = "ACK"  # Default value
-        if fname2:
-            option2 = "ACK"
-
-    # Build command
-    command = {
-        "command": "START",
-        "id": user_id,
-        "password": password,
-        "vin": vin,
-        "fname1": fname1,
-        "fname2": fname2,
-        "response_option": response_option,
-        "option1": option1,
-        "option2": option2
-    }
-
-    print("\n" + "-" * 60)
-    print("Command to send:")
-    print(json.dumps(command, indent=2))
-    print("-" * 60)
-
-    confirm = input("\nSend this command? (y/n): ").strip().lower()
-    if confirm == 'y':
-        send_command(host, port, command)
-    else:
-        print("Cancelled")
 
 
 def main():
     """Main entry point"""
-    if len(sys.argv) < 2:
+    # Check arguments
+    if len(sys.argv) != 2:
         print("Usage:")
-        print("  python tcp_client_example.py start         - Send START command (edit script first!)")
-        print("  python tcp_client_example.py stop          - Send STOP command")
-        print("  python tcp_client_example.py test          - Send test START command")
-        print("  python tcp_client_example.py custom <file> - Send command from JSON file")
-        print("  python tcp_client_example.py interactive   - Interactive mode")
+        print("  python tcp_client_example.py <json_file_path>")
+        print("")
+        print("Example:")
+        print("  python tcp_client_example.py example_command.json")
+        print("  python tcp_client_example.py C:\\path\\to\\command.json")
         sys.exit(1)
 
-    command_type = sys.argv[1].lower()
+    json_file_path = sys.argv[1]
 
     # Server configuration
     HOST = 'localhost'
     PORT = 5000
 
-    if command_type == 'start':
-        # Example START command
-        # NOTE: Replace these values with actual credentials and data
-        command = {
-            "command": "START",
-            "id": "your_username",
-            "password": "your_password",
-            "vin": "KMHXX00XXXX000000",
-            "fname1": "CSU_ACN",
-            "fname2": None,  # Optional
-            "response_option": 1,  # 1=default, 2=custom, 3=no_response
-            "option1": "ACK",
-            "option2": None  # Required if fname2 provided and response_option=2
-        }
+    # Check if file exists
+    if not os.path.exists(json_file_path):
+        print(f"ERROR: File not found: {json_file_path}")
+        sys.exit(1)
 
-        print("=" * 60)
-        print("SENDING START COMMAND")
-        print("=" * 60)
-        response = send_command(HOST, PORT, command)
+    # Load command from JSON file
+    print("=" * 60)
+    print("TSP AUTO - TCP CLIENT")
+    print("=" * 60)
+    print(f"JSON File: {json_file_path}")
+    print(f"Server: {HOST}:{PORT}")
+    print("=" * 60)
 
-        if response:
-            if response.get('result') == 'success':
-                print("\n" + "=" * 60)
-                print("SUCCESS!")
-                print("=" * 60)
-                print(f"VIN: {response.get('vin')}")
-                print(f"Functions: {', '.join(response.get('fnames', []))}")
-                print(f"Response Type: {response.get('response_type')}")
-                print(f"Options: {', '.join(response.get('options', []))}")
-            else:
-                print("\n" + "=" * 60)
-                print("ERROR!")
-                print("=" * 60)
-                print(f"Error Code: {response.get('error_code')}")
-                print(f"Error Message: {response.get('error_message')}")
+    command = load_command_from_file(json_file_path)
 
-    elif command_type == 'stop':
-        # STOP command
-        command = {
-            "command": "STOP"
-        }
+    if not command:
+        print("\nFailed to load JSON file")
+        sys.exit(1)
 
-        print("=" * 60)
-        print("SENDING STOP COMMAND")
-        print("=" * 60)
-        response = send_command(HOST, PORT, command)
+    # Send command to server
+    response = send_command(HOST, PORT, command)
 
-        if response:
-            print("\nServer is stopping...")
-
-    elif command_type == 'test':
-        # Test command with mock data
-        command = {
-            "command": "START",
-            "id": "test_user",
-            "password": "test_pass",
-            "vin": "TEST123456789",
-            "fname1": "TEST_FUNCTION",
-            "fname2": None,
-            "response_option": 1,
-            "option1": "TEST",
-            "option2": None
-        }
-
-        print("=" * 60)
-        print("SENDING TEST COMMAND (will likely fail - test data)")
-        print("=" * 60)
-        response = send_command(HOST, PORT, command)
-
-        if response:
-            print(f"\nResult: {response.get('result')}")
-
-    elif command_type == 'custom':
-        # Load command from file
-        if len(sys.argv) < 3:
-            print("ERROR: Please specify JSON file path")
-            print("Usage: python tcp_client_example.py custom <json_file>")
-            sys.exit(1)
-
-        filepath = sys.argv[2]
-        command = load_command_from_file(filepath)
-
-        if command:
+    # Display result
+    if response:
+        print("\n" + "=" * 60)
+        if response.get('result') == 'success':
+            print("SUCCESS")
             print("=" * 60)
-            print("SENDING CUSTOM COMMAND FROM FILE")
+            print(f"VIN: {response.get('vin')}")
+            print(f"Functions: {', '.join(response.get('fnames', []))}")
+            print(f"Response Type: {response.get('response_type')}")
+            if response.get('response_type2') is not None:
+                print(f"Response Type 2: {response.get('response_type2')}")
+            print(f"Options: {', '.join(response.get('options', []))}")
+            print(f"Timestamp: {response.get('timestamp')}")
+        else:
+            print("ERROR")
             print("=" * 60)
-            response = send_command(HOST, PORT, command)
-
-            if response:
-                print(f"\nResult: {response.get('result')}")
-
-    elif command_type == 'interactive':
-        # Interactive mode
-        interactive_mode(HOST, PORT)
-
+            print(f"Error Code: {response.get('error_code')}")
+            print(f"Error Message: {response.get('error_message')}")
+            if response.get('detail'):
+                print(f"Detail: {response.get('detail')}")
+        print("=" * 60)
+        sys.exit(0 if response.get('result') == 'success' else 1)
     else:
-        print(f"Unknown command type: {command_type}")
-        print("Use 'start', 'stop', 'test', 'custom', or 'interactive'")
+        print("\nFailed to communicate with server")
         sys.exit(1)
 
 

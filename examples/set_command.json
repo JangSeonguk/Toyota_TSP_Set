@@ -1,0 +1,6 @@
+{
+  "command": "SET",
+  "fname": "CSU_ACN",
+  "response_option": 3,
+  "option": "ACK"
+}
