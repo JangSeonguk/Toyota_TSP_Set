@@ -1,6 +1,6 @@
 """
-TCP-Controlled Web Browser Automation Module
-Main entry point for the automation system
+TSP Auto - Main Entry Point
+TCP-Controlled Web Browser Automation System
 """
 
 import argparse

@@ -8,4 +8,5 @@
 *.md
 *.zip
 *.spec
-/examples_client request/
+/examples/
+backup*/

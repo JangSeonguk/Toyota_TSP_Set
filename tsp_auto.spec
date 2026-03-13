@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['browser_module.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[],

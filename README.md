@@ -22,7 +22,7 @@ pip install -r requirements.txt
 
 ### 서버 빌드
 ```bash
-pyinstaller --onefile --name tsp_auto browser_module.py
+pyinstaller --onefile --name tsp_auto main.py
 ```
 
 ### 클라이언트 빌드
@@ -39,7 +39,7 @@ pyinstaller --onefile --name tsp_client tsp_client.py
 ### 서버 실행
 ```bash
 # Python
-python browser_module.py --port 5000 --debug
+python main.py --port 5000 --debug
 
 # EXE
 dist\tsp_auto.exe --port 5000 --debug
@@ -200,7 +200,7 @@ python tsp_client.py --file command.json
 ### 핵심 모듈
 | 파일 | 설명 |
 |------|------|
-| `browser_module.py` | 메인 진입점 |
+| `main.py` | 메인 진입점 |
 | `tcp_server.py` | TCP 서버 |
 | `command_processor.py` | 명령 처리 |
 | `automation_workflow.py` | 자동화 워크플로우 |
