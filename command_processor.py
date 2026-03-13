@@ -200,23 +200,38 @@ def _validate_push_command(command_dict: Dict[str, Any]) -> Tuple[bool, Optional
     """
     Validate PUSH command parameters
 
+    Supports two modes:
+    1. push_type mode: push_type field present → validate against known types
+    2. Legacy mode: topic + push_template required
+
     Args:
         command_dict: Command dictionary
 
     Returns:
         Tuple of (is_valid: bool, error_code or None, error_detail or None)
     """
-    # Required parameters for PUSH command
-    topic = command_dict.get('topic')
-    if not topic:
-        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: topic"
+    push_type = command_dict.get('push_type')
 
-    push_template = command_dict.get('push_template')
-    if not push_template:
-        return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: push_template"
+    if push_type:
+        # push_type mode: validate against known push types
+        valid_types = ['vls_emergency', 'vls_non_emergency', 'provisioning', 'dhc']
+        if push_type not in valid_types:
+            return False, ErrorCode.INVALID_COMMAND_FORMAT, f"Invalid push_type: {push_type}. Valid types: {', '.join(valid_types)}"
 
-    logger.log_info(f"PUSH command validated: topic={topic}, push_template={push_template}")
-    return True, None, None
+        logger.log_info(f"PUSH command validated (push_type mode): push_type={push_type}")
+        return True, None, None
+    else:
+        # Legacy mode: topic + push_template required
+        topic = command_dict.get('topic')
+        if not topic:
+            return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: topic (or use push_type)"
+
+        push_template = command_dict.get('push_template')
+        if not push_template:
+            return False, ErrorCode.MISSING_REQUIRED_PARAMS, "Missing required parameter: push_template"
+
+        logger.log_info(f"PUSH command validated (legacy mode): topic={topic}, push_template={push_template}")
+        return True, None, None
 
 
 def parse_command_json(json_string: str) -> Tuple[Optional[Dict[str, Any]], Optional[ErrorCode], Optional[str]]:
@@ -238,4 +253,4 @@ def parse_command_json(json_string: str) -> Tuple[Optional[Dict[str, Any]], Opti
         return None, ErrorCode.INVALID_COMMAND_FORMAT, f"JSON parse error: {str(e)}"
     except Exception as e:
         logger.log_error("Unexpected error parsing command JSON", e)
-        return None, ErrorCode.UNKNOWN_ERROR, f"Parse error: {str(e)}"
+        return None, ErrorCode.COMMAND_PROCESSING_ERROR, f"Parse error: {str(e)}"

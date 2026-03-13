@@ -218,7 +218,7 @@ def run_command_line_mode(args: argparse.Namespace):
 
     except Exception as e:
         logger.log_error("Error in command-line mode", e)
-        response = response_handler.create_error_response(ErrorCode.UNKNOWN_ERROR, str(e))
+        response = response_handler.create_error_response(ErrorCode.COMMAND_PROCESSING_ERROR, str(e))
         print(response_handler.format_response_for_display(response))
 
         # Wait briefly before cleanup even on error
@@ -268,6 +268,7 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
                     response_type2=None
                 )
                 response['message'] = 'Stopping server'
+                response['command'] = 'STOP'
                 tcp_server.send_response(response)
                 stop_event.set()
                 break
@@ -286,6 +287,7 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
                         result_data['options'],
                         result_data.get('response_type2')
                     )
+                    response['command'] = 'START'
 
                     # Check if add_request mode is enabled
                     add_request = command.get('add_request', False)
@@ -300,6 +302,11 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
 
                 # Send response
                 tcp_server.send_response(response)
+
+                # Close browser if add_request is not enabled
+                if not command.get('add_request', False):
+                    logger.log_info("add_request disabled: closing browser")
+                    browser_manager.stop_browser()
 
             # Handle SET command
             elif command.get('command') == 'SET':
@@ -322,11 +329,20 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
                 success, result_data, error_code = automation_workflow.execute_push_command(command)
 
                 if success:
-                    response = response_handler.create_push_response(
-                        result_data['vin'],
-                        result_data['topic'],
-                        result_data['push_template']
-                    )
+                    if result_data.get('push_type'):
+                        # push_type mode
+                        response = response_handler.create_push_response(
+                            result_data['vin'],
+                            push_type=result_data['push_type'],
+                            steps_completed=result_data['steps_completed']
+                        )
+                    else:
+                        # Legacy mode
+                        response = response_handler.create_push_response(
+                            result_data['vin'],
+                            topic=result_data['topic'],
+                            push_template=result_data['push_template']
+                        )
                 else:
                     response = response_handler.create_error_response(error_code)
 
@@ -348,7 +364,7 @@ def process_command_worker(command_queue: CommandQueue, tcp_server: TCPServer, s
             logger.log_error("Error in command processor worker", e)
             try:
                 error_response = response_handler.create_error_response(
-                    ErrorCode.UNKNOWN_ERROR,
+                    ErrorCode.COMMAND_PROCESSING_ERROR,
                     str(e)
                 )
                 tcp_server.send_response(error_response)

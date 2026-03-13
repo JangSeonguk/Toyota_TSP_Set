@@ -3,6 +3,9 @@ Browser Manager Module
 Handles WebDriver lifecycle, element waiting, and browser state management
 """
 
+import os
+import signal
+import threading
 from typing import Optional, Tuple
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -23,6 +26,8 @@ from error_codes import ErrorCode, get_error_message
 
 # Global browser instance (singleton)
 _browser_instance: Optional[webdriver.Chrome] = None
+_browser_lock = threading.Lock()  # Thread-safe lock for browser operations
+_is_stopping = False  # Flag to prevent duplicate stop attempts
 
 
 def start_browser() -> webdriver.Chrome:
@@ -47,9 +52,13 @@ def start_browser() -> webdriver.Chrome:
         # Configure Chrome options
         chrome_options = webdriver.ChromeOptions()
 
-        # Headless MUST be False - buttons not visible in headless mode
+        # Headless mode configuration (Chrome 109+ uses --headless=new)
         if config.BROWSER_OPTIONS['headless']:
-            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('--headless=new')
+            # Additional stability options for headless mode
+            chrome_options.add_argument('--disable-software-rasterizer')
+            chrome_options.add_argument('--force-device-scale-factor=1')
+            logger.log_info("Headless mode enabled (--headless=new)")
 
         chrome_options.add_argument(f"--window-size={config.BROWSER_OPTIONS['window_size']}")
 
@@ -76,9 +85,12 @@ def start_browser() -> webdriver.Chrome:
 
         _browser_instance = webdriver.Chrome(service=service, options=chrome_options)
 
-        # Maximize browser window to fullscreen
-        _browser_instance.maximize_window()
-        logger.log_info("Browser window maximized to fullscreen")
+        # Maximize browser window to fullscreen (skip in headless mode)
+        if not config.BROWSER_OPTIONS['headless']:
+            _browser_instance.maximize_window()
+            logger.log_info("Browser window maximized to fullscreen")
+        else:
+            logger.log_info(f"Headless mode: using window size {config.BROWSER_OPTIONS['window_size']}")
 
         # Set page load timeout
         _browser_instance.set_page_load_timeout(config.PAGE_LOAD_TIMEOUT)
@@ -94,23 +106,50 @@ def start_browser() -> webdriver.Chrome:
 
 def stop_browser():
     """
-    Close browser and quit WebDriver
+    Close browser and quit WebDriver (thread-safe)
     """
-    global _browser_instance
+    global _browser_instance, _is_stopping
 
-    if _browser_instance is None:
-        logger.log_info("No browser instance to stop")
-        return
+    # Check if already stopping or no instance (with lock)
+    with _browser_lock:
+        if _is_stopping:
+            logger.log_info("Browser stop already in progress, skipping")
+            return
 
+        if _browser_instance is None:
+            logger.log_info("No browser instance to stop")
+            return
+
+        _is_stopping = True
+        browser_to_close = _browser_instance
+
+    # Perform quit in a separate thread with timeout
     logger.log_info("Stopping browser...")
 
-    try:
-        _browser_instance.quit()
+    def _quit_browser():
+        try:
+            browser_to_close.quit()
+        except Exception:
+            pass
+
+    quit_thread = threading.Thread(target=_quit_browser, daemon=True)
+    quit_thread.start()
+    quit_thread.join(timeout=10)
+
+    if quit_thread.is_alive():
+        logger.log_fail("Browser quit timed out (10s), force killing ChromeDriver process")
+        try:
+            pid = browser_to_close.service.process.pid
+            os.kill(pid, signal.SIGTERM)
+            logger.log_info(f"ChromeDriver process (PID={pid}) terminated")
+        except Exception as e:
+            logger.log_error("Failed to kill ChromeDriver process", e)
+    else:
         logger.log_success("Browser stopped successfully")
-    except Exception as e:
-        logger.log_error("Error stopping browser", e)
-    finally:
+
+    with _browser_lock:
         _browser_instance = None
+        _is_stopping = False
 
 
 def get_browser() -> Optional[webdriver.Chrome]:
@@ -281,7 +320,7 @@ def wait_for_element(
 
     except Exception as e:
         logger.log_error(f"Error waiting for element: {selector}", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        return False, None, ErrorCode.WEBDRIVER_ERROR
 
 
 def wait_for_clickable(
@@ -319,7 +358,7 @@ def wait_for_clickable(
 
     except Exception as e:
         logger.log_error(f"Error waiting for clickable element: {selector}", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        return False, None, ErrorCode.WEBDRIVER_ERROR
 
 
 def login_with_retry(user_id: str, password: str) -> Tuple[bool, Optional[ErrorCode]]:

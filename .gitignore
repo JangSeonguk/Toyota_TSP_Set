@@ -6,3 +6,6 @@
 /specs/
 /tests/
 *.md
+*.zip
+*.spec
+/examples_client request/

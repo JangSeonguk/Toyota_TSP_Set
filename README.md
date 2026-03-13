@@ -96,15 +96,26 @@ python tsp_client.py --file command.json
 }
 ```
 
+| 파라미터 | 필수 | 설명 |
+|----------|------|------|
+| `fname` | O | 함수명 |
+| `response_option` | O | 응답 옵션 (1=default, 2=custom, 3=no_response) |
+| `option` | X | 타입 값 (response_option=2일 때 필수) |
+
 ### PUSH - DCM Push 명령 (add_request 모드)
 
 ```json
 {
   "command": "PUSH",
-  "topic": "doorlock",
-  "push_template": "CYCL_AHCVT_CMD"
+  "topic": "voicekill",
+  "push_template": "voicekill"
 }
 ```
+
+| 파라미터 | 필수 | 설명 |
+|----------|------|------|
+| `topic` | O | Push 토픽 (예: voicekill) |
+| `push_template` | O | Push 템플릿 이름 (예: voicekill) |
 
 ### CLOSE - 세션 종료 (add_request 모드)
 
@@ -114,6 +125,8 @@ python tsp_client.py --file command.json
 }
 ```
 
+파라미터 없음. 현재 세션을 종료하고 브라우저를 닫습니다.
+
 ### STOP - 서버 종료
 
 ```json
@@ -121,6 +134,8 @@ python tsp_client.py --file command.json
   "command": "STOP"
 }
 ```
+
+파라미터 없음. 서버를 완전히 종료합니다.
 
 ---
 

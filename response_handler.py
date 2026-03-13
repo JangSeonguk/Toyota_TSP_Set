@@ -120,16 +120,24 @@ def create_set_response(
 
 def create_push_response(
     vin: str,
-    topic: str,
-    push_template: str
+    topic: Optional[str] = None,
+    push_template: Optional[str] = None,
+    push_type: Optional[str] = None,
+    steps_completed: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Create PUSH command success response
 
+    Supports two modes:
+    1. push_type mode: includes push_type and steps_completed
+    2. Legacy mode: includes topic and push_template
+
     Args:
         vin: VIN used
-        topic: Push topic
-        push_template: Push template name
+        topic: Push topic (legacy mode)
+        push_template: Push template name (legacy mode)
+        push_type: Push type key (push_type mode)
+        steps_completed: Number of steps completed (push_type mode)
 
     Returns:
         Success response dictionary
@@ -138,12 +146,18 @@ def create_push_response(
         "result": "success",
         "command": "PUSH",
         "vin": vin,
-        "topic": topic,
-        "push_template": push_template,
         "timestamp": datetime.utcnow().isoformat() + "Z"
     }
 
-    logger.log_info(f"Created PUSH response: topic={topic}")
+    if push_type:
+        response["push_type"] = push_type
+        response["steps_completed"] = steps_completed
+        logger.log_info(f"Created PUSH response: push_type={push_type}, steps={steps_completed}")
+    else:
+        response["topic"] = topic
+        response["push_template"] = push_template
+        logger.log_info(f"Created PUSH response: topic={topic}")
+
     return response
 
 

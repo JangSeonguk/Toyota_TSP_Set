@@ -21,6 +21,14 @@ class ErrorCode(Enum):
     PUSH_COMMAND_FAILED = 1012
     SESSION_TIMEOUT = 1013
     NO_ACTIVE_SESSION = 1014
+    ELEMENT_CLICK_FAILED = 1015
+    BUTTON_VALIDATION_FAILED = 1016
+    PAGE_NAVIGATION_ERROR = 1017
+    JAVASCRIPT_EXECUTION_ERROR = 1018
+    DROPDOWN_SELECTION_ERROR = 1019
+    WORKFLOW_EXECUTION_ERROR = 1020
+    WEBDRIVER_ERROR = 1021
+    COMMAND_PROCESSING_ERROR = 1022
 
 
 # Error message mapping
@@ -38,7 +46,25 @@ ERROR_MESSAGES = {
     ErrorCode.UNKNOWN_ERROR: "Unknown error occurred",
     ErrorCode.PUSH_COMMAND_FAILED: "Push command failed",
     ErrorCode.SESSION_TIMEOUT: "Session timeout",
-    ErrorCode.NO_ACTIVE_SESSION: "No active session"
+    ErrorCode.NO_ACTIVE_SESSION: "No active session",
+    ErrorCode.ELEMENT_CLICK_FAILED: "All click methods failed for element",
+    ErrorCode.BUTTON_VALIDATION_FAILED: "Button text does not match expected value",
+    ErrorCode.PAGE_NAVIGATION_ERROR: "Page navigation or element search failed",
+    ErrorCode.JAVASCRIPT_EXECUTION_ERROR: "JavaScript execution failed on page element",
+    ErrorCode.DROPDOWN_SELECTION_ERROR: "Dropdown option selection failed",
+    ErrorCode.WORKFLOW_EXECUTION_ERROR: "Workflow execution failed unexpectedly",
+    ErrorCode.WEBDRIVER_ERROR: "WebDriver internal error (non-timeout)",
+    ErrorCode.COMMAND_PROCESSING_ERROR: "Command processing failed"
+}
+
+
+# Errors that should not be retried (result won't change on retry)
+NON_RETRYABLE_ERRORS = {
+    ErrorCode.MISSING_REQUIRED_PARAMS,
+    ErrorCode.INVALID_COMMAND_FORMAT,
+    ErrorCode.INVALID_RESPONSE_OPTION,
+    ErrorCode.JSON_PARSING_ERROR,
+    ErrorCode.NO_ACTIVE_SESSION,
 }
 
 

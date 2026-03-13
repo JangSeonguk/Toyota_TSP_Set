@@ -11,9 +11,73 @@ from selenium.webdriver.common.keys import Keys
 
 import config
 import logger
-from error_codes import ErrorCode, get_error_message
+from error_codes import ErrorCode, get_error_message, NON_RETRYABLE_ERRORS
 import browser_manager
 import session_manager
+
+
+# Push type definitions for complex push commands (VLS, Provisioning, DHC)
+# {VIN} placeholders are replaced with actual VIN at runtime
+PUSH_TYPE_DEFINITIONS = {
+    "vls_emergency": {
+        "steps": [
+            {
+                "name": "VLS(Emergency) Start",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/start",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"START"},"transmissionTimestampUTC":"$default"},"body":{"reportSetting":{"priority":"EMERGENCY","activateTimeLimit":"ON","timeLimit":{"unit":"DAYS","value":1},"ignitionONReport":"OFF","ignitionOFFReport":"OFF","activateTimeInterval":"ON","interval":{"unit":"MIN","value":2},"historyReport":"YES"}}}'
+            },
+            {
+                "name": "VLS Voice",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/voice",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"VOICE_CALL"},"transmissionTimestampUTC":"$default"},"body":{"callSetting":{"hmi":"ON"}}}'
+            },
+            {
+                "name": "VLS Stop",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/stop",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"STOP"},"transmissionTimestampUTC":"$default"}}'
+            }
+        ]
+    },
+    "vls_non_emergency": {
+        "steps": [
+            {
+                "name": "VLS(Non_Emergency) Start",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/start",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"START"},"transmissionTimestampUTC":"$default"},"body":{"reportSetting":{"priority":"NON_EMERGENCY","activateTimeLimit":"ON","timeLimit":{"unit":"DAYS","value":1},"ignitionONReport":"OFF","ignitionOFFReport":"OFF","activateTimeInterval":"ON","interval":{"unit":"MIN","value":2},"historyReport":"YES"}}}'
+            },
+            {
+                "name": "VLS Stop",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/stop",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"STOP"},"transmissionTimestampUTC":"$default"}}'
+            }
+        ]
+    },
+    "provisioning": {
+        "steps": [
+            {
+                "name": "Provisioning",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/provisioning",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/provisioning",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"PROV","operation":"PROVISIONING"},"transmissionTimestampUTC":"$default"},"body":{"provisioning":{"brand":"Lexus","provisioningLanguage":"en","configuration":{"callbackStandByTimer":30,"sosCancelTimer":10,"activeDataStateTimer":9,"callbackTimer":90,"phoneNumbers":[{"service":"ACN","type":"PRIMARY","value":"+84902803814"},{"service":"ACN","type":"SECONDARY","value":"+84902803814"},{"service":"SOS","type":"PRIMARY","value":"+84902803814"},{"service":"SOS","type":"SECONDARY","value":"+84902803814"},{"service":"RSN","type":"PRIMARY","value":"+84902803814"},{"service":"RSN","type":"SECONDARY","value":"+84902803814"},{"service":"VLS","type":"PRIMARY","value":"+84902803814"},{"service":"VLS","type":"SECONDARY","value":"+84902803814"},{"service":"INBOUND","type":"PRIMARY","value":"+84902803814"},{"service":"INBOUND","type":"SECONDARY","value":"+84902803814"},{"service":"INBOUND","type":"THIRD","value":""},{"service":"INBOUND","type":"FOURTH","value":""},{"service":"INBOUND","type":"FIFTH","value":""},{"service":"INBOUND","type":"SIXTH","value":""},{"service":"INBOUND","type":"SEVENTH","value":""},{"service":"INBOUND","type":"EIGHTH","value":""},{"service":"INBOUND","type":"NINTH","value":""},{"service":"INBOUND","type":"TENTH","value":""}]},"serviceFlags":[{"service":"ACN","flagValue":"ON"},{"service":"SOS","flagValue":"ON"},{"service":"VLS","flagValue":"ON"},{"service":"RSN","flagValue":"ON"},{"service":"DHC","flagValue":"ON"}]}}}'
+            }
+        ]
+    },
+    "dhc": {
+        "steps": [
+            {
+                "name": "DHC",
+                "topic": "{VIN}/C2V/DESTSW/safety/cmd/dhc",
+                "response_topic": "{VIN}/C2V/DESTSW/safety/dhc",
+                "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"DHC","operation":"DHC"},"transmissionTimestampUTC":"$default"}}'
+            }
+        ]
+    }
+}
 
 
 def search_vin(vin: str, click_result: bool = True) -> Tuple[bool, Optional[ErrorCode]]:
@@ -59,15 +123,32 @@ def search_vin(vin: str, click_result: bool = True) -> Tuple[bool, Optional[Erro
 
         if click_result:
             # Initial search: Wait for and click first result row
-            success, result_row, error = browser_manager.wait_for_clickable(
-                config.SELECTORS['vin_result_row']
-            )
+            # Retry Enter if result row not found (sometimes first Enter doesn't trigger update)
+            max_retry = 2
+            result_row = None
+            for attempt in range(max_retry + 1):
+                success, result_row, error = browser_manager.wait_for_clickable(
+                    config.SELECTORS['vin_result_row'],
+                    timeout=5
+                )
+                if success:
+                    break
+                if attempt < max_retry:
+                    logger.log_info(f"VIN result not found, retrying Enter (attempt {attempt + 2}/{max_retry + 1})")
+                    vin_input.send_keys(Keys.RETURN)
+                    time.sleep(1.0)
             if not success:
-                logger.log_fail(f"VIN result not clickable: {vin}")
+                logger.log_fail(f"VIN result not clickable after {max_retry + 1} attempts: {vin}")
                 return False, error
 
-            logger.log_info("Clicking first VIN result")
-            result_row.click()
+            # Wait 2 seconds before clicking VIN result
+            logger.log_info("Waiting 2 seconds before clicking VIN result...")
+            time.sleep(2.0)
+
+            logger.log_info("Clicking first VIN result row")
+            # result_row is a td cell, click its parent tr
+            row = result_row.find_element(By.XPATH, './ancestor::tr')
+            row.click()
 
             # CRITICAL: Wait for page transition after clicking VIN result
             # This loads the Friendly Name table page
@@ -78,15 +159,30 @@ def search_vin(vin: str, click_result: bool = True) -> Tuple[bool, Optional[Erro
 
             logger.log_success(f"VIN search successful (with click): {vin}")
         else:
-            # fname2 search: Just verify table is visible (no click needed)
-            # The friendly name table should already be on the same page
+            # fname2 search: Verify result row is visible (no click needed)
+            # Retry Enter if result row not found
+            max_retry = 2
+            for attempt in range(max_retry + 1):
+                success, _, error = browser_manager.wait_for_clickable(
+                    config.SELECTORS['vin_result_row'],
+                    timeout=5
+                )
+                if success:
+                    break
+                if attempt < max_retry:
+                    logger.log_info(f"VIN result not found, retrying Enter (attempt {attempt + 2}/{max_retry + 1})")
+                    vin_input.send_keys(Keys.RETURN)
+                    time.sleep(1.0)
+            if not success:
+                logger.log_fail(f"VIN result not found after {max_retry + 1} attempts: {vin}")
+                return False, ErrorCode.VIN_NOT_FOUND
             logger.log_success(f"VIN search successful (table displayed): {vin}")
 
         return True, None
 
     except Exception as e:
         logger.log_error(f"Error searching for VIN: {vin}", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.PAGE_NAVIGATION_ERROR
 
 
 def search_function_name(fname: str) -> Tuple[bool, Optional[ErrorCode]]:
@@ -108,18 +204,12 @@ def search_function_name(fname: str) -> Tuple[bool, Optional[ErrorCode]]:
 
     try:
         # Wait for table to load by checking for at least one function name cell
-        import time
-        max_wait = config.ELEMENT_WAIT_TIMEOUT
-        wait_interval = 0.5
-        elapsed = 0
-
-        cells = []
-        while elapsed < max_wait:
-            cells = browser.find_elements(By.CSS_SELECTOR, config.SELECTORS['function_name_cell'])
-            if cells:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
+        success, _, error = browser_manager.wait_for_element(
+            config.SELECTORS['function_name_cell']
+        )
+        if not success:
+            logger.log_fail("No function name cells found")
+            return False, ErrorCode.FUNCTION_NAME_NOT_FOUND
 
         # Get all function name cells (column 3)
         cells = browser.find_elements(By.CSS_SELECTOR, config.SELECTORS['function_name_cell'])
@@ -161,7 +251,7 @@ def search_function_name(fname: str) -> Tuple[bool, Optional[ErrorCode]]:
 
                 except Exception as e:
                     logger.log_error(f"Error clicking function name row", e)
-                    return False, ErrorCode.UNKNOWN_ERROR
+                    return False, ErrorCode.ELEMENT_CLICK_FAILED
 
         # No match found
         logger.log_fail(f"Function name not found: {fname}")
@@ -169,7 +259,7 @@ def search_function_name(fname: str) -> Tuple[bool, Optional[ErrorCode]]:
 
     except Exception as e:
         logger.log_error(f"Error searching for function name: {fname}", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.PAGE_NAVIGATION_ERROR
 
 
 def select_response_option(option: int) -> Tuple[bool, Optional[ErrorCode]]:
@@ -250,7 +340,7 @@ def select_response_option(option: int) -> Tuple[bool, Optional[ErrorCode]]:
 
     except Exception as e:
         logger.log_error(f"Error selecting response option: {option}", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.ELEMENT_CLICK_FAILED
 
 
 def modify_json_type(option_value: str) -> Tuple[bool, Optional[ErrorCode]]:
@@ -339,7 +429,7 @@ def modify_json_type(option_value: str) -> Tuple[bool, Optional[ErrorCode]]:
 
     except Exception as e:
         logger.log_error("Error modifying JSON", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.JAVASCRIPT_EXECUTION_ERROR
 
 
 def click_update_button() -> Tuple[bool, Optional[ErrorCode]]:
@@ -373,7 +463,7 @@ def click_update_button() -> Tuple[bool, Optional[ErrorCode]]:
 
         if "Update" not in button_text:
             logger.log_fail(f"Button text does not contain 'Update': {button_text}")
-            return False, ErrorCode.UNKNOWN_ERROR
+            return False, ErrorCode.BUTTON_VALIDATION_FAILED
 
         # Try multiple click methods for robustness
         try:
@@ -388,7 +478,7 @@ def click_update_button() -> Tuple[bool, Optional[ErrorCode]]:
                 logger.log_success("Update button clicked (JavaScript click)")
             except Exception as js_error:
                 logger.log_fail(f"All click methods failed: {js_error}")
-                return False, ErrorCode.UNKNOWN_ERROR
+                return False, ErrorCode.ELEMENT_CLICK_FAILED
 
         # Wait longer for page transition to ensure update is processed
         import time
@@ -399,7 +489,7 @@ def click_update_button() -> Tuple[bool, Optional[ErrorCode]]:
 
     except Exception as e:
         logger.log_error("Error clicking update button", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.PAGE_NAVIGATION_ERROR
 
 
 def process_function_name(
@@ -459,7 +549,40 @@ def process_function_name(
 
 def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
     """
-    Execute full automation workflow
+    Execute automation workflow with retry on retryable errors.
+    Closes browser and retries from login on timeout or browser errors.
+
+    Args:
+        command_data: Command dictionary with START command parameters
+
+    Returns:
+        Tuple of (success: bool, result_data or None, error_code or None)
+    """
+    max_retries = config.MAX_START_RETRIES
+
+    for attempt in range(1, max_retries + 1):
+        success, result_data, error_code = _execute_automation_impl(command_data)
+
+        if success:
+            return success, result_data, error_code
+
+        # Non-retryable errors return immediately
+        if error_code in NON_RETRYABLE_ERRORS:
+            return success, result_data, error_code
+
+        # Last attempt exhausted
+        if attempt == max_retries:
+            logger.log_fail(f"Max retries exceeded ({max_retries})")
+            return success, result_data, error_code
+
+        # Close browser and retry
+        logger.log_info(f"Error occurred ({error_code.name}), retrying after browser restart ({attempt}/{max_retries})")
+        browser_manager.stop_browser()
+
+
+def _execute_automation_impl(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Internal implementation of the automation workflow.
 
     Args:
         command_data: Command dictionary with keys:
@@ -556,7 +679,7 @@ def execute_automation(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dic
 
     except Exception as e:
         logger.log_error("Unexpected error in automation workflow", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        return False, None, ErrorCode.WORKFLOW_EXECUTION_ERROR
 
 
 def execute_set_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
@@ -627,17 +750,22 @@ def execute_set_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Di
 
     except Exception as e:
         logger.log_error("Unexpected error in SET command workflow", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        return False, None, ErrorCode.WORKFLOW_EXECUTION_ERROR
 
 
 def execute_push_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
     """
     Execute PUSH command workflow to send push command to DCM
 
+    Supports two modes:
+    1. push_type mode: Uses PUSH_TYPE_DEFINITIONS for multi-step complex pushes
+    2. Legacy mode: Uses topic/push_template for simple pushes (backward compatible)
+
     Args:
         command_data: Command dictionary with keys:
-            - topic: Push topic (e.g., "doorlock")
-            - push_template: Push template name (e.g., "CYCL_AHCVT_CMD")
+            - push_type: (Optional) Push type key (e.g., "vls_emergency", "dhc")
+            - topic: (Legacy) Push topic (e.g., "doorlock")
+            - push_template: (Legacy) Push template name (e.g., "CYCL_AHCVT_CMD")
 
     Returns:
         Tuple of (success: bool, result_data or None, error_code or None)
@@ -656,93 +784,348 @@ def execute_push_command(command_data: Dict[str, Any]) -> Tuple[bool, Optional[D
             logger.log_fail("No VIN stored in session")
             return False, None, ErrorCode.NO_ACTIVE_SESSION
 
-        topic = command_data.get('topic')
-        push_template = command_data.get('push_template')
+        push_type = command_data.get('push_type')
 
-        logger.log_info(f"PUSH command: VIN={vin}, topic={topic}, template={push_template}")
+        # Dispatch based on mode
+        if push_type:
+            # push_type mode: multi-step complex push
+            return _execute_push_type(vin, push_type)
+        else:
+            # Legacy mode: topic/push_template
+            return _execute_push_legacy(vin, command_data)
 
-        browser = browser_manager.get_browser()
-        if browser is None:
-            logger.log_fail("Browser not running")
-            return False, None, ErrorCode.BROWSER_CRASH
+    except Exception as e:
+        logger.log_error("Unexpected error in PUSH command workflow", e)
+        return False, None, ErrorCode.WORKFLOW_EXECUTION_ERROR
 
-        # Step 1: Navigate to push-command page
+
+def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Execute legacy PUSH command using topic/push_template (backward compatible)
+    """
+    topic = command_data.get('topic')
+    push_template = command_data.get('push_template')
+
+    logger.log_info(f"PUSH command (legacy): VIN={vin}, topic={topic}, template={push_template}")
+
+    browser = browser_manager.get_browser()
+    if browser is None:
+        logger.log_fail("Browser not running")
+        return False, None, ErrorCode.BROWSER_CRASH
+
+    # Step 1: Navigate to push-command page
+    logger.log_info(f"Navigating to {config.PUSH_COMMAND_URL}")
+    browser.get(config.PUSH_COMMAND_URL)
+    time.sleep(1.5)
+
+    # Step 2: Enter VIN in push-devices-input
+    success, devices_input, error = browser_manager.wait_for_element(
+        config.SELECTORS['push_devices_input']
+    )
+    if not success:
+        logger.log_fail("Push devices input not found")
+        return False, None, error
+
+    devices_input.clear()
+    devices_input.send_keys(vin)
+    logger.log_info(f"Entered VIN in push devices input: {vin}")
+    time.sleep(0.5)
+
+    # Step 3: Select topic from dropdown (#input-4)
+    topic_value = f"{vin}/C2V/DESTSW/safety/cmd/{topic}"
+    success, error = _select_dropdown_option(
+        config.SELECTORS['push_topic_dropdown'],
+        topic_value
+    )
+    if not success:
+        logger.log_fail(f"Failed to select topic: {topic_value}")
+        return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+    # Step 4: Select template from dropdown (#input-6)
+    template_value = f"cmd/{push_template}"
+    success, error = _select_dropdown_option(
+        config.SELECTORS['push_template_dropdown'],
+        template_value
+    )
+    if not success:
+        logger.log_fail(f"Failed to select template: {template_value}")
+        return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+    # Step 5: Click Send button
+    success, send_btn, error = browser_manager.wait_for_clickable(
+        config.SELECTORS['push_send_button']
+    )
+    if not success:
+        logger.log_fail("Send button not found or not clickable")
+        return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+    send_btn.click()
+    logger.log_info("Clicked Send button")
+    time.sleep(1.0)
+
+    # Step 6: Verify success message
+    success, alert, error = browser_manager.wait_for_element(
+        config.SELECTORS['push_success_alert']
+    )
+    if not success:
+        logger.log_fail("Push command did not show success message")
+        return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+    logger.log_success("Push command success alert detected")
+
+    result_data = {
+        'command': 'PUSH',
+        'vin': vin,
+        'topic': topic,
+        'push_template': push_template
+    }
+
+    logger.log_success(f"PUSH command completed: topic={topic}, template={push_template}")
+    return True, result_data, None
+
+
+def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
+    """
+    Execute push_type mode: multi-step push using PUSH_TYPE_DEFINITIONS
+
+    Args:
+        vin: VIN from active session
+        push_type: Key in PUSH_TYPE_DEFINITIONS (e.g., "vls_emergency")
+
+    Returns:
+        Tuple of (success: bool, result_data or None, error_code or None)
+    """
+    logger.log_info(f"PUSH command (push_type): VIN={vin}, type={push_type}")
+
+    definition = PUSH_TYPE_DEFINITIONS.get(push_type)
+    if not definition:
+        logger.log_fail(f"Unknown push_type: {push_type}")
+        return False, None, ErrorCode.INVALID_COMMAND_FORMAT
+
+    steps = definition['steps']
+    total_steps = len(steps)
+
+    browser = browser_manager.get_browser()
+    if browser is None:
+        logger.log_fail("Browser not running")
+        return False, None, ErrorCode.BROWSER_CRASH
+
+    steps_completed = 0
+
+    for idx, step in enumerate(steps):
+        step_num = idx + 1
+        step_name = step['name']
+        logger.log_info(f"Step {step_num}/{total_steps}: {step_name}")
+
+        # Replace {VIN} placeholders
+        topic_value = step['topic'].replace('{VIN}', vin)
+        response_topic_value = step['response_topic'].replace('{VIN}', vin)
+        json_body = step['json_body']
+
+        # Navigate to push-command page (refresh for each step)
         logger.log_info(f"Navigating to {config.PUSH_COMMAND_URL}")
         browser.get(config.PUSH_COMMAND_URL)
-        time.sleep(1.5)  # Wait for page load
+        time.sleep(1.5)
 
-        # Step 2: Enter VIN in push-devices-input
+        # Enter VIN
         success, devices_input, error = browser_manager.wait_for_element(
             config.SELECTORS['push_devices_input']
         )
         if not success:
-            logger.log_fail("Push devices input not found")
+            logger.log_fail(f"Step {step_num}: Push devices input not found")
             return False, None, error
 
         devices_input.clear()
         devices_input.send_keys(vin)
-        logger.log_info(f"Entered VIN in push devices input: {vin}")
+        logger.log_info(f"Step {step_num}: Entered VIN: {vin}")
         time.sleep(0.5)
 
-        # Step 3: Select topic from dropdown (#input-4)
-        # Format: {vin}/C2V/DESTSW/safety/cmd/{topic}
-        topic_value = f"{vin}/C2V/DESTSW/safety/cmd/{topic}"
-        success, error = _select_dropdown_option(
-            config.SELECTORS['push_topic_dropdown'],
+        # Select Topic dropdown (XPATH: input-group-3 → input-4)
+        success, error = _select_dropdown_by_xpath(
+            config.SELECTORS['push_topic_dropdown_xpath'],
             topic_value
         )
         if not success:
-            logger.log_fail(f"Failed to select topic: {topic_value}")
+            logger.log_fail(f"Step {step_num}: Failed to select topic: {topic_value}")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
-        # Step 4: Select template from dropdown (#input-6)
-        # Format: cmd/{push_template}
-        template_value = f"cmd/{push_template}"
-        success, error = _select_dropdown_option(
-            config.SELECTORS['push_template_dropdown'],
-            template_value
+        time.sleep(0.5)
+
+        # Select Response Topic dropdown (XPATH: input-group-5 → input-4)
+        success, error = _select_dropdown_by_xpath(
+            config.SELECTORS['push_response_topic_dropdown_xpath'],
+            response_topic_value
         )
         if not success:
-            logger.log_fail(f"Failed to select template: {template_value}")
+            logger.log_fail(f"Step {step_num}: Failed to select response topic: {response_topic_value}")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
-        # Step 5: Click Send button
+        time.sleep(0.5)
+
+        # Fill textarea with JSON body (do NOT touch push_template dropdown)
+        success, error = _fill_push_textarea(json_body)
+        if not success:
+            logger.log_fail(f"Step {step_num}: Failed to fill textarea")
+            return False, None, ErrorCode.PUSH_COMMAND_FAILED
+
+        time.sleep(0.5)
+
+        # Click Send button
         success, send_btn, error = browser_manager.wait_for_clickable(
             config.SELECTORS['push_send_button']
         )
         if not success:
-            logger.log_fail("Send button not found or not clickable")
+            logger.log_fail(f"Step {step_num}: Send button not found")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
         send_btn.click()
-        logger.log_info("Clicked Send button")
+        logger.log_info(f"Step {step_num}: Clicked Send button")
         time.sleep(1.0)
 
-        # Step 6: Verify success message
+        # Verify success message
         success, alert, error = browser_manager.wait_for_element(
-            config.SELECTORS['push_success_alert'],
-            timeout=5
+            config.SELECTORS['push_success_alert']
         )
         if not success:
-            logger.log_fail("Push command did not show success message")
+            logger.log_fail(f"Step {step_num}: No success message after send")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
-        logger.log_success("Push command success alert detected")
+        steps_completed += 1
+        logger.log_success(f"Step {step_num}/{total_steps} completed: {step_name}")
 
-        # Build result data
-        result_data = {
-            'command': 'PUSH',
-            'vin': vin,
-            'topic': topic,
-            'push_template': push_template
-        }
+        # Wait before next step (if not last)
+        if step_num < total_steps:
+            logger.log_info(f"Waiting 2 seconds before next step...")
+            time.sleep(2.0)
 
-        logger.log_success(f"PUSH command completed: topic={topic}, template={push_template}")
-        return True, result_data, None
+    result_data = {
+        'command': 'PUSH',
+        'vin': vin,
+        'push_type': push_type,
+        'steps_completed': steps_completed
+    }
+
+    logger.log_success(f"PUSH command completed: push_type={push_type}, steps={steps_completed}/{total_steps}")
+    return True, result_data, None
+
+
+def _select_dropdown_by_xpath(xpath: str, value: str) -> Tuple[bool, Optional[ErrorCode]]:
+    """
+    Select an option from a dropdown located by XPATH
+
+    Args:
+        xpath: XPATH selector for the dropdown (select element)
+        value: Value or text to match in option
+
+    Returns:
+        Tuple of (success: bool, error_code or None)
+    """
+    browser = browser_manager.get_browser()
+    if browser is None:
+        return False, ErrorCode.BROWSER_CRASH
+
+    try:
+        # Wait for dropdown element by XPATH
+        success, dropdown, error = browser_manager.wait_for_element(
+            xpath, by=By.XPATH
+        )
+        if not success:
+            logger.log_fail(f"Dropdown not found at XPATH: {xpath}")
+            return False, error
+
+        # Click to open dropdown
+        dropdown.click()
+        time.sleep(0.3)
+
+        # Try to find matching option by iterating all options
+        try:
+            options = dropdown.find_elements(By.TAG_NAME, 'option')
+            for option in options:
+                option_value = option.get_attribute('value') or ''
+                option_text = option.text.strip()
+                if value == option_value or value == option_text or value in option_value or value in option_text:
+                    option.click()
+                    logger.log_info(f"Selected dropdown option: {value}")
+                    return True, None
+        except Exception as e:
+            logger.log_info(f"Option iteration failed: {e}")
+
+        # Fallback: use Select class
+        try:
+            from selenium.webdriver.support.ui import Select
+            select = Select(dropdown)
+            # Try by value first
+            try:
+                select.select_by_value(value)
+                logger.log_info(f"Selected dropdown option via Select.select_by_value: {value}")
+                return True, None
+            except:
+                pass
+            # Try by visible text
+            try:
+                select.select_by_visible_text(value)
+                logger.log_info(f"Selected dropdown option via Select.select_by_visible_text: {value}")
+                return True, None
+            except:
+                pass
+        except Exception as e:
+            logger.log_info(f"Select class fallback failed: {e}")
+
+        logger.log_fail(f"Could not find dropdown option: {value}")
+        return False, ErrorCode.ELEMENT_WAIT_TIMEOUT
 
     except Exception as e:
-        logger.log_error("Unexpected error in PUSH command workflow", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        logger.log_error(f"Error selecting dropdown option by XPATH: {value}", e)
+        return False, ErrorCode.DROPDOWN_SELECTION_ERROR
+
+
+def _fill_push_textarea(json_content: str) -> Tuple[bool, Optional[ErrorCode]]:
+    """
+    Fill the push command textarea with JSON content using fallback selectors
+
+    Args:
+        json_content: JSON string to place in textarea
+
+    Returns:
+        Tuple of (success: bool, error_code or None)
+    """
+    browser = browser_manager.get_browser()
+    if browser is None:
+        return False, ErrorCode.BROWSER_CRASH
+
+    try:
+        textarea = None
+
+        # Try fallback selectors from config
+        for selector in config.PUSH_TEXTAREA_FALLBACKS:
+            try:
+                el = browser.find_element(By.CSS_SELECTOR, selector)
+                if el.is_displayed():
+                    textarea = el
+                    logger.log_info(f"Textarea found with selector: {selector}")
+                    break
+            except:
+                continue
+
+        if textarea is None:
+            logger.log_fail("Textarea not found with any fallback selector")
+            return False, ErrorCode.ELEMENT_WAIT_TIMEOUT
+
+        # Clear and set value via JavaScript (reliable for Vue.js/React bindings)
+        browser.execute_script("""
+            var textarea = arguments[0];
+            var content = arguments[1];
+            textarea.value = content;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        """, textarea, json_content)
+
+        logger.log_info(f"Textarea filled with JSON ({len(json_content)} chars)")
+        return True, None
+
+    except Exception as e:
+        logger.log_error("Error filling push textarea", e)
+        return False, ErrorCode.JAVASCRIPT_EXECUTION_ERROR
 
 
 def _select_dropdown_option(selector: str, value: str) -> Tuple[bool, Optional[ErrorCode]]:
@@ -809,7 +1192,7 @@ def _select_dropdown_option(selector: str, value: str) -> Tuple[bool, Optional[E
 
     except Exception as e:
         logger.log_error(f"Error selecting dropdown option: {value}", e)
-        return False, ErrorCode.UNKNOWN_ERROR
+        return False, ErrorCode.DROPDOWN_SELECTION_ERROR
 
 
 def execute_close_command() -> Tuple[bool, Optional[Dict[str, Any]], Optional[ErrorCode]]:
@@ -845,4 +1228,4 @@ def execute_close_command() -> Tuple[bool, Optional[Dict[str, Any]], Optional[Er
 
     except Exception as e:
         logger.log_error("Unexpected error in CLOSE command workflow", e)
-        return False, None, ErrorCode.UNKNOWN_ERROR
+        return False, None, ErrorCode.WORKFLOW_EXECUTION_ERROR
