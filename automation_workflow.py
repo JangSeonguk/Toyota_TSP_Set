@@ -4,7 +4,10 @@ Implements the 8-step web automation workflow
 """
 
 import json
+import os
+import sys
 import time
+from datetime import datetime
 from typing import Optional, Tuple, List, Dict, Any
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -16,6 +19,87 @@ import browser_manager
 import session_manager
 
 
+def _capture_debug_snapshot(browser, step_num: int, fail_reason: str):
+    """
+    Capture diagnostic snapshot on failure: screenshot + page info.
+    Files are saved to the same directory as the log file.
+
+    Args:
+        browser: Selenium WebDriver instance
+        step_num: Current step number for filename
+        fail_reason: Short label for the failure (e.g., 'topic_dropdown')
+    """
+    if not logger.is_debug_enabled():
+        return
+
+    try:
+        log_dir = logger.get_log_dir()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = f"debug_step{step_num}_{fail_reason}_{timestamp}"
+
+        # 1) Screenshot
+        screenshot_path = os.path.join(log_dir, f"{prefix}.png")
+        browser.save_screenshot(screenshot_path)
+        logger.log_info(f"[DEBUG SNAPSHOT] Screenshot saved: {screenshot_path}")
+
+        # 2) Current URL
+        logger.log_info(f"[DEBUG SNAPSHOT] Current URL: {browser.current_url}")
+
+        # 3) Page HTML snippet (body, truncated to 3000 chars)
+        try:
+            body_html = browser.execute_script(
+                "return document.body ? document.body.innerHTML.substring(0, 3000) : 'NO BODY';"
+            )
+            html_path = os.path.join(log_dir, f"{prefix}.html")
+            with open(html_path, 'w', encoding='utf-8') as f:
+                f.write(f"<!-- URL: {browser.current_url} -->\n")
+                f.write(f"<!-- Captured: {timestamp} -->\n")
+                f.write(body_html)
+            logger.log_info(f"[DEBUG SNAPSHOT] HTML saved: {html_path}")
+        except Exception as e:
+            logger.log_info(f"[DEBUG SNAPSHOT] HTML capture failed: {e}")
+
+        # 4) All visible alerts/errors on page
+        try:
+            alerts = browser.find_elements(By.CSS_SELECTOR, '.alert, .error, .alert-danger, .alert-warning')
+            for alert in alerts:
+                if alert.is_displayed():
+                    logger.log_info(f"[DEBUG SNAPSHOT] Page alert: [{alert.get_attribute('class')}] {alert.text[:200]}")
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.log_info(f"[DEBUG SNAPSHOT] Snapshot capture failed: {e}")
+
+
+def _log_dropdown_options(browser, xpath: str, label: str):
+    """
+    Log all available options in a dropdown for debugging.
+
+    Args:
+        browser: Selenium WebDriver instance
+        xpath: XPATH of the dropdown element
+        label: Human-readable label (e.g., 'Topic', 'Response Topic')
+    """
+    if not logger.is_debug_enabled():
+        return
+
+    try:
+        dropdown = browser.find_element(By.XPATH, xpath)
+        options = dropdown.find_elements(By.TAG_NAME, 'option')
+        option_list = []
+        for opt in options:
+            val = opt.get_attribute('value') or ''
+            txt = opt.text.strip()
+            option_list.append(f"  value='{val}' text='{txt}'")
+
+        logger.log_info(f"[DEBUG] {label} dropdown has {len(option_list)} options:")
+        for opt_str in option_list:
+            logger.log_info(f"[DEBUG]   {opt_str}")
+    except Exception as e:
+        logger.log_info(f"[DEBUG] Could not read {label} dropdown options: {e}")
+
+
 # Push type definitions for complex push commands (VLS, Provisioning, DHC)
 # {VIN} placeholders are replaced with actual VIN at runtime
 PUSH_TYPE_DEFINITIONS = {
@@ -24,19 +108,19 @@ PUSH_TYPE_DEFINITIONS = {
             {
                 "name": "VLS(Emergency) Start",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/start",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/vls/start",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"START"},"transmissionTimestampUTC":"$default"},"body":{"reportSetting":{"priority":"EMERGENCY","activateTimeLimit":"ON","timeLimit":{"unit":"DAYS","value":1},"ignitionONReport":"OFF","ignitionOFFReport":"OFF","activateTimeInterval":"ON","interval":{"unit":"MIN","value":2},"historyReport":"YES"}}}'
             },
             {
                 "name": "VLS Voice",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/voice",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/vls/voice",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"VOICE_CALL"},"transmissionTimestampUTC":"$default"},"body":{"callSetting":{"hmi":"ON"}}}'
             },
             {
                 "name": "VLS Stop",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/stop",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/vls/stop",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"STOP"},"transmissionTimestampUTC":"$default"}}'
             }
         ]
@@ -46,13 +130,13 @@ PUSH_TYPE_DEFINITIONS = {
             {
                 "name": "VLS(Non_Emergency) Start",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/start",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/vls/start",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"START"},"transmissionTimestampUTC":"$default"},"body":{"reportSetting":{"priority":"NON_EMERGENCY","activateTimeLimit":"ON","timeLimit":{"unit":"DAYS","value":1},"ignitionONReport":"OFF","ignitionOFFReport":"OFF","activateTimeInterval":"ON","interval":{"unit":"MIN","value":2},"historyReport":"YES"}}}'
             },
             {
                 "name": "VLS Stop",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/vls",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/vls/stop",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/vls/stop",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"VLS","operation":"STOP"},"transmissionTimestampUTC":"$default"}}'
             }
         ]
@@ -62,7 +146,7 @@ PUSH_TYPE_DEFINITIONS = {
             {
                 "name": "Provisioning",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/provisioning",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/cmd/result/provisioning",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/cmd/result/provisioning",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"PROV","operation":"PROVISIONING"},"transmissionTimestampUTC":"$default"},"body":{"provisioning":{"brand":"Lexus","provisioningLanguage":"en","configuration":{"callbackStandByTimer":30,"sosCancelTimer":10,"activeDataStateTimer":9,"callbackTimer":90,"phoneNumbers":[{"service":"ACN","type":"PRIMARY","value":"+84902803814"},{"service":"ACN","type":"SECONDARY","value":"+84902803814"},{"service":"SOS","type":"PRIMARY","value":"+84902803814"},{"service":"SOS","type":"SECONDARY","value":"+84902803814"},{"service":"RSN","type":"PRIMARY","value":"+84902803814"},{"service":"RSN","type":"SECONDARY","value":"+84902803814"},{"service":"VLS","type":"PRIMARY","value":"+84902803814"},{"service":"VLS","type":"SECONDARY","value":"+84902803814"},{"service":"INBOUND","type":"PRIMARY","value":"+84902803814"},{"service":"INBOUND","type":"SECONDARY","value":"+84902803814"},{"service":"INBOUND","type":"THIRD","value":""},{"service":"INBOUND","type":"FOURTH","value":""},{"service":"INBOUND","type":"FIFTH","value":""},{"service":"INBOUND","type":"SIXTH","value":""},{"service":"INBOUND","type":"SEVENTH","value":""},{"service":"INBOUND","type":"EIGHTH","value":""},{"service":"INBOUND","type":"NINTH","value":""},{"service":"INBOUND","type":"TENTH","value":""}]},"serviceFlags":[{"service":"ACN","flagValue":"ON"},{"service":"SOS","flagValue":"ON"},{"service":"VLS","flagValue":"ON"},{"service":"RSN","flagValue":"ON"},{"service":"DHC","flagValue":"ON"}]}}}'
             }
         ]
@@ -72,7 +156,7 @@ PUSH_TYPE_DEFINITIONS = {
             {
                 "name": "DHC",
                 "topic": "{VIN}/C2V/DESTSW/safety/cmd/dhc",
-                "response_topic": "{VIN}/C2V/DESTSW/safety/dhc",
+                "response_topic": "{VIN}/V2C/DESTSW/safety/dhc",
                 "json_body": '{"header":{"userProperties":{"correlationId":"$default","sessionId":"$default","sequenceId":"$default"},"message":{"type":"REQUEST","service":"DHC","operation":"DHC"},"transmissionTimestampUTC":"$default"}}'
             }
         ]
@@ -816,10 +900,10 @@ def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, 
     # Step 1: Navigate to push-command page
     logger.log_info(f"Navigating to {config.PUSH_COMMAND_URL}")
     browser.get(config.PUSH_COMMAND_URL)
-    time.sleep(1.5)
+    time.sleep(3)
 
     # Step 2: Enter VIN in push-devices-input
-    success, devices_input, error = browser_manager.wait_for_element(
+    success, devices_input, error = browser_manager.wait_for_clickable(
         config.SELECTORS['push_devices_input']
     )
     if not success:
@@ -828,8 +912,9 @@ def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, 
 
     devices_input.clear()
     devices_input.send_keys(vin)
+    devices_input.send_keys(Keys.RETURN)
     logger.log_info(f"Entered VIN in push devices input: {vin}")
-    time.sleep(0.5)
+    time.sleep(1.5)
 
     # Step 3: Select topic from dropdown (#input-4)
     topic_value = f"{vin}/C2V/DESTSW/safety/cmd/{topic}"
@@ -840,6 +925,7 @@ def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, 
     if not success:
         logger.log_fail(f"Failed to select topic: {topic_value}")
         return False, None, ErrorCode.PUSH_COMMAND_FAILED
+    time.sleep(0.5)
 
     # Step 4: Select template from dropdown (#input-6)
     template_value = f"cmd/{push_template}"
@@ -850,6 +936,7 @@ def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, 
     if not success:
         logger.log_fail(f"Failed to select template: {template_value}")
         return False, None, ErrorCode.PUSH_COMMAND_FAILED
+    time.sleep(0.5)
 
     # Step 5: Click Send button
     success, send_btn, error = browser_manager.wait_for_clickable(
@@ -861,7 +948,7 @@ def _execute_push_legacy(vin: str, command_data: Dict[str, Any]) -> Tuple[bool, 
 
     send_btn.click()
     logger.log_info("Clicked Send button")
-    time.sleep(1.0)
+    time.sleep(1.5)
 
     # Step 6: Verify success message
     success, alert, error = browser_manager.wait_for_element(
@@ -925,20 +1012,22 @@ def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[st
         # Navigate to push-command page (refresh for each step)
         logger.log_info(f"Navigating to {config.PUSH_COMMAND_URL}")
         browser.get(config.PUSH_COMMAND_URL)
-        time.sleep(1.5)
+        time.sleep(3)
 
         # Enter VIN
-        success, devices_input, error = browser_manager.wait_for_element(
+        success, devices_input, error = browser_manager.wait_for_clickable(
             config.SELECTORS['push_devices_input']
         )
         if not success:
-            logger.log_fail(f"Step {step_num}: Push devices input not found")
+            logger.log_fail(f"Step {step_num}: Push devices input not found (selector: {config.SELECTORS['push_devices_input']})")
+            _capture_debug_snapshot(browser, step_num, "vin_input")
             return False, None, error
 
         devices_input.clear()
         devices_input.send_keys(vin)
+        devices_input.send_keys(Keys.RETURN)
         logger.log_info(f"Step {step_num}: Entered VIN: {vin}")
-        time.sleep(0.5)
+        time.sleep(1.5)
 
         # Select Topic dropdown (XPATH: input-group-3 → input-4)
         success, error = _select_dropdown_by_xpath(
@@ -947,8 +1036,9 @@ def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[st
         )
         if not success:
             logger.log_fail(f"Step {step_num}: Failed to select topic: {topic_value}")
+            _log_dropdown_options(browser, config.SELECTORS['push_topic_dropdown_xpath'], "Topic")
+            _capture_debug_snapshot(browser, step_num, "topic_dropdown")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
-
         time.sleep(0.5)
 
         # Select Response Topic dropdown (XPATH: input-group-5 → input-4)
@@ -958,16 +1048,17 @@ def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[st
         )
         if not success:
             logger.log_fail(f"Step {step_num}: Failed to select response topic: {response_topic_value}")
+            _log_dropdown_options(browser, config.SELECTORS['push_response_topic_dropdown_xpath'], "Response Topic")
+            _capture_debug_snapshot(browser, step_num, "response_topic_dropdown")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
-
         time.sleep(0.5)
 
         # Fill textarea with JSON body (do NOT touch push_template dropdown)
         success, error = _fill_push_textarea(json_body)
         if not success:
-            logger.log_fail(f"Step {step_num}: Failed to fill textarea")
+            logger.log_fail(f"Step {step_num}: Failed to fill textarea (tried {len(config.PUSH_TEXTAREA_FALLBACKS)} selectors)")
+            _capture_debug_snapshot(browser, step_num, "textarea")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
-
         time.sleep(0.5)
 
         # Click Send button
@@ -975,19 +1066,21 @@ def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[st
             config.SELECTORS['push_send_button']
         )
         if not success:
-            logger.log_fail(f"Step {step_num}: Send button not found")
+            logger.log_fail(f"Step {step_num}: Send button not found (selector: {config.SELECTORS['push_send_button']})")
+            _capture_debug_snapshot(browser, step_num, "send_button")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
         send_btn.click()
         logger.log_info(f"Step {step_num}: Clicked Send button")
-        time.sleep(1.0)
+        time.sleep(1.5)
 
         # Verify success message
         success, alert, error = browser_manager.wait_for_element(
             config.SELECTORS['push_success_alert']
         )
         if not success:
-            logger.log_fail(f"Step {step_num}: No success message after send")
+            logger.log_fail(f"Step {step_num}: No success message after send (selector: {config.SELECTORS['push_success_alert']})")
+            _capture_debug_snapshot(browser, step_num, "success_alert")
             return False, None, ErrorCode.PUSH_COMMAND_FAILED
 
         steps_completed += 1
@@ -1007,6 +1100,7 @@ def _execute_push_type(vin: str, push_type: str) -> Tuple[bool, Optional[Dict[st
 
     logger.log_success(f"PUSH command completed: push_type={push_type}, steps={steps_completed}/{total_steps}")
     return True, result_data, None
+
 
 
 def _select_dropdown_by_xpath(xpath: str, value: str) -> Tuple[bool, Optional[ErrorCode]]:
